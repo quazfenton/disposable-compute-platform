@@ -1,0 +1,27 @@
+[Unit]
+Description=Disposable Compute Platform API
+After=network.target
+
+[Service]
+Type=simple
+User=disposable-compute
+Group=disposable-compute
+WorkingDirectory=/opt/disposable-compute-platform
+Environment=PATH=/opt/disposable-compute-platform/venv/bin
+ExecStart=/opt/disposable-compute-platform/venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/disposable-compute
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target
