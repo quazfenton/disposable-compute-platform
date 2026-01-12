@@ -186,7 +186,9 @@ class RunRepoManager:
         # Update session with container info
         session.container_id = json.dumps(container_ids)
         session.network_id = network_name
-        session.status = SessionStatus.RUNNING
+from src.models.session import Session, ServiceDefinition, SessionStatus
+from src.models.environment import Environment
+from src.services.platform import SessionManager
         
         # Create external access
         if service.get('port'):

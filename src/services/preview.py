@@ -237,7 +237,10 @@ class PreviewEnvironmentManager:
         if service_type in ['postgres', 'mysql']:
             if pr_number is not None:
                 volume_name = await self.db_manager.create_database_volume(name, pr_number)
-                volumes.append(f"{volume_name}:/var/lib/postgresql/data")
+                if service_type == 'postgres':
+                    volumes.append(f"{volume_name}:/var/lib/postgresql/data")
+                else:  # mysql
+                    volumes.append(f"{volume_name}:/var/lib/mysql")
         
         # Create service definition
         service_def = {
