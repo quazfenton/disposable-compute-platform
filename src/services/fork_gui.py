@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import tempfile
 
-from src.models.session import Session, Snapshot
+from src.models.session import Session, Snapshot, SessionStatus
 from src.models.environment import Environment
 from src.services.platform import SessionManager, SnapshotManager
 

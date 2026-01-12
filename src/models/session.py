@@ -77,7 +77,7 @@ class Snapshot:
     session_id: str
     created_at: datetime
     parent_snapshot_id: Optional[str] = None
-    state_data: Dict[str, any] = None
+    state_data: Dict[str, Any] = None
     metadata: Dict[str, str] = None
     
     def __post_init__(self):

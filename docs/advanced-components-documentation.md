@@ -47,7 +47,7 @@ pod_spec = PodSpec(
 pod = Pod(
     id="my-pod-123",
     spec=pod_spec,
-    status=PodStatus.CREATING,
+    status=PodStatus.PROVISIONING,
     created_at=datetime.now(),
     updated_at=datetime.now()
 )
@@ -65,7 +65,8 @@ The VM model manages virtual machine instances within the disposable compute pla
 
 ### Usage Example
 ```python
-from src.models.vm import VM, VMSpec, VMType
+from src.models.vm import VM, VMSpec, VMType, VMStatus
+from datetime import datetime
 
 # Create a VM specification
 vm_spec = VMSpec(

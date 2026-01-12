@@ -29,7 +29,7 @@ class ContainerConfig:
         if self.ports is None:
             self.ports = {}
         if self.volumes is None:
-            self.volumes = {}
+            self.volumes = []
 
 
 class ContainerOrchestrator:
@@ -73,7 +73,7 @@ class ContainerOrchestrator:
                 detach=True,
                 labels={
                     "disposable_compute": "true",
-                    "created_at": str(config.created_at) if hasattr(config, 'created_at') else str(datetime.now())
+                    "created_at": str(config.created_at) if config.created_at is not None else str(datetime.now())
                 },
                 **(config.resource_limits or {})
             )

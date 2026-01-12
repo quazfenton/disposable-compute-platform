@@ -221,7 +221,7 @@ class PreviewEnvironmentManager:
             if service_type == 'postgres':
                 image = f"postgres:{definition.get('version', '15')}-alpine"
             elif service_type == 'mysql':
-                image = f"mysql:{definition.get('version', '8.0')}-alpine"
+                image = f"mysql:{definition.get('version', '8.0')}"
             elif service_type == 'redis':
                 image = 'redis:alpine'
             elif service_type == 'web':
