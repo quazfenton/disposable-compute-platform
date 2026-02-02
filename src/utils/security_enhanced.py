@@ -279,7 +279,7 @@ class NetworkPolicyEnforcer:
 class CredentialManager:
     """Manages secure credential storage and access"""
     
-    def __init__(self, storage_path: str = "/tmp/dcp-credentials"):
+    def __init__(self, storage_path: str = "/var/lib/dcp-credentials"):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(__name__)
@@ -287,19 +287,22 @@ class CredentialManager:
     def store_credential(self, key: str, value: str, ttl_minutes: int = 60) -> str:
         """Store a credential securely"""
         try:
-            # Create a secure file with restricted permissions
-            cred_file = self.storage_path / f"{key}.cred"
-            
-            # Write the credential
-            with open(cred_file, 'w') as f:
-                f.write(value)
-            
-            # Set restrictive permissions (owner read/write only)
-            os.chmod(cred_file, 0o600)
-            
+            # Sanitize the key to prevent path traversal
+            sanitized_key = Path(key).name  # Only use the filename part, discard any path components
+            cred_file = self.storage_path / f"{sanitized_key}.cred"
+
+            # Write the credential with restrictive permissions from the start to avoid race condition
+            fd = os.open(cred_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    f.write(value)
+            except:
+                os.close(fd)
+                raise
+
             # Schedule cleanup
             asyncio.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
-            
+
             self.logger.info(f"Stored credential for key: {key}")
             return str(cred_file)
         except Exception as e:
@@ -309,11 +312,13 @@ class CredentialManager:
     def retrieve_credential(self, key: str) -> Optional[str]:
         """Retrieve a credential"""
         try:
-            cred_file = self.storage_path / f"{key}.cred"
-            
+            # Sanitize the key to prevent path traversal
+            sanitized_key = Path(key).name  # Only use the filename part, discard any path components
+            cred_file = self.storage_path / f"{sanitized_key}.cred"
+
             if not cred_file.exists():
                 return None
-            
+
             with open(cred_file, 'r') as f:
                 return f.read().strip()
         except Exception as e:
@@ -323,12 +328,14 @@ class CredentialManager:
     def delete_credential(self, key: str) -> bool:
         """Delete a credential"""
         try:
-            cred_file = self.storage_path / f"{key}.cred"
-            
+            # Sanitize the key to prevent path traversal
+            sanitized_key = Path(key).name  # Only use the filename part, discard any path components
+            cred_file = self.storage_path / f"{sanitized_key}.cred"
+
             if cred_file.exists():
                 cred_file.unlink()
                 self.logger.info(f"Deleted credential for key: {key}")
-            
+
             return True
         except Exception as e:
             self.logger.error(f"Failed to delete credential for key {key}: {e}")

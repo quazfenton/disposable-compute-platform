@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 import json
 import os
+import pathlib
 from src.models.session import Session, SessionType, SessionStatus, ServiceDefinition
 from src.models.environment import Environment
 from src.containers.orchestrator import ContainerOrchestrator
@@ -332,12 +333,22 @@ class SnapshotManager:
     
     async def load_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
         """Load a snapshot's state"""
-        snapshot_path = os.path.join(self.storage_path, f"{snapshot_id}.json")
-        
+        # Sanitize the snapshot_id to prevent path traversal
+        safe_snapshot_id = pathlib.Path(snapshot_id).name
+        snapshot_path = os.path.join(self.storage_path, f"{safe_snapshot_id}.json")
+
+        # Ensure the resolved path is within the storage directory
+        resolved_path = os.path.abspath(snapshot_path)
+        storage_path_abs = os.path.abspath(self.storage_path)
+
+        if not resolved_path.startswith(storage_path_abs):
+            self.logger.warning(f"Path traversal attempt detected: {snapshot_id}")
+            return None
+
         if not os.path.exists(snapshot_path):
             return None
-        
+
         with open(snapshot_path, 'r') as f:
             data = json.load(f)
-        
+
         return data

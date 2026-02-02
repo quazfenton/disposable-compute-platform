@@ -4,7 +4,7 @@ Container orchestration service for disposable compute platform
 import docker
 import logging
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from src.models.session import Session, ServiceDefinition
 from src.models.environment import Environment
 
@@ -18,7 +18,7 @@ class ContainerConfig:
     command: Optional[str] = None
     environment: Dict[str, str] = None
     ports: Dict[str, int] = None
-    volumes: List[str] = None
+    volumes: List[str] = field(default_factory=list)
     network: Optional[str] = None
     resource_limits: Optional[Dict[str, str]] = None
     created_at: Optional[datetime] = None
@@ -28,8 +28,6 @@ class ContainerConfig:
             self.environment = {}
         if self.ports is None:
             self.ports = {}
-        if self.volumes is None:
-            self.volumes = []
 
 
 class ContainerOrchestrator:

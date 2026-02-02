@@ -248,14 +248,19 @@ class LoadBalancer:
             # In a real implementation, this would make an HTTP request to the health check path
             host = backend.get('host', 'localhost')
             port = backend.get('port', 80)
-            
-            # Check if port is open
-            with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-                sock.settimeout(5)  # 5 second timeout
-                result = sock.connect_ex((host, port))
-                return result == 0
+
+            # Check if port is open using a thread executor to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, self._sync_check_port, host, port)
+            return result == 0
         except Exception:
             return False
+
+    def _sync_check_port(self, host: str, port: int) -> int:
+        """Synchronous function to check if a port is open"""
+        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            sock.settimeout(5)  # 5 second timeout
+            return sock.connect_ex((host, port))
 
 
 class ServiceMeshManager:

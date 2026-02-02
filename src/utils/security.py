@@ -213,11 +213,12 @@ class AccessController:
         """Validate an access token for a session"""
         if session_id not in self.session_tokens:
             return False
-        
+
         stored_token = self.session_tokens[session_id]
-        if token != stored_token:
+        # Use constant-time comparison to prevent timing attacks
+        if not secrets.compare_digest(token, stored_token):
             return False
-        
+
         # Check expiration
         if token in self.token_expiration:
             if datetime.now().timestamp() > self.token_expiration[token]:
@@ -225,7 +226,7 @@ class AccessController:
                 del self.session_tokens[session_id]
                 del self.token_expiration[token]
                 return False
-        
+
         return True
     
     def revoke_access_token(self, session_id: str):

@@ -219,32 +219,56 @@ class AutoScaler:
         """Evaluate if scaling is needed for a pod"""
         if pod_id not in self.scaling_policies:
             return None
-        
+
         policy = self.scaling_policies[pod_id]
-        
+
         # Get predicted usage
         prediction = self.resource_predictor.predict_usage(pod_id)
         if not prediction:
             return None
-        
+
         # Calculate if scaling is needed
         cpu_utilization = current_usage.get('cpu_percent', 0) / 100.0
         memory_utilization = current_usage.get('memory_used_mb', 0) / max(current_usage.get('memory_total_mb', 1), 1)
-        
+
         # Use the higher of CPU or memory utilization for scaling decision
         current_utilization = max(cpu_utilization, memory_utilization)
-        
+
         # Calculate scaling factor
         if current_utilization > policy['target_utilization'] * 1.2:  # Scale up if utilization is 20% above target
-            # Scale up
+            # Scale up - calculate target resources based on current resources
             scale_factor = min(1.5, current_utilization / policy['target_utilization'])  # Max 1.5x scale up
-            return self._calculate_scaled_resources(policy['max_resources'], scale_factor)
+            # Use current resources as base for scaling, then clamp to policy limits
+            target_resources = self._calculate_scaled_resources(self._get_current_resources(pod_id), scale_factor)
+            return self._clamp_resources(target_resources, policy['min_resources'], policy['max_resources'])
         elif current_utilization < policy['target_utilization'] * 0.8:  # Scale down if utilization is 20% below target
-            # Scale down
+            # Scale down - calculate target resources based on current resources
             scale_factor = max(0.5, current_utilization / policy['target_utilization'])  # Min 0.5x scale down
-            return self._calculate_scaled_resources(policy['min_resources'], scale_factor)
-        
+            target_resources = self._calculate_scaled_resources(self._get_current_resources(pod_id), scale_factor)
+            return self._clamp_resources(target_resources, policy['min_resources'], policy['max_resources'])
+
         return None  # No scaling needed
+
+    def _get_current_resources(self, pod_id: str) -> Dict[str, Any]:
+        """Get current resources for a pod (placeholder implementation)"""
+        # In a real implementation, this would track current resources for each pod
+        # For now, return a default set of resources
+        return {
+            'cpu_cores': 1.0,
+            'memory_mb': 1024,
+            'storage_gb': 10
+        }
+
+    def _clamp_resources(self, resources: Dict[str, Any], min_resources: Dict[str, Any], max_resources: Dict[str, Any]) -> Dict[str, Any]:
+        """Clamp resources between min and max values"""
+        clamped = {}
+        for key in set(resources.keys()) | set(min_resources.keys()) | set(max_resources.keys()):
+            value = resources.get(key, 0)
+            min_val = min_resources.get(key, 0)
+            max_val = max_resources.get(key, float('inf'))
+
+            clamped[key] = max(min_val, min(value, max_val))
+        return clamped
     
     def _calculate_scaled_resources(self, base_resources: Dict[str, Any], scale_factor: float) -> Dict[str, Any]:
         """Calculate scaled resources based on a scale factor"""

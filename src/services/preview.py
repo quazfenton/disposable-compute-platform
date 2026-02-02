@@ -11,6 +11,7 @@ import subprocess
 import json
 
 from src.models.session import Session, ServiceDefinition
+from src.types.platform_types import SessionStatus
 from src.models.environment import Environment
 from src.services.platform import SessionManager
 from src.containers.orchestrator import ContainerOrchestrator
@@ -183,13 +184,14 @@ class PreviewEnvironmentManager:
         internal_dns = self.session_manager.network_manager.setup_internal_dns(
             network_name, services
         )
+        environment.metadata['internal_dns'] = internal_dns
         
         # Create containers for all services
         container_ids = self.session_manager.container_orchestrator.create_environment_containers(environment)
         
         # Handle special service types
         await self._setup_special_services(
-            preview_config, container_ids, session.pr_number
+            session, preview_config, container_ids, session.pr_number
         )
         
         # Create external access URLs
@@ -255,27 +257,36 @@ class PreviewEnvironmentManager:
         
         return service_def
     
-    async def _setup_special_services(self, preview_config: Dict[str, Any], container_ids: Dict[str, str], pr_number: Optional[int]):
+    async def _setup_special_services(self, session: Session, preview_config: Dict[str, Any], container_ids: Dict[str, str], pr_number: Optional[int]):
         """Setup special services like cron jobs"""
         # Handle cron jobs
+        cron_job_names = []
         for service_name, service_def in preview_config.get('services', {}).items():
             if service_def.get('type') == 'cron' and 'schedule' in service_def:
                 cron_container_id = container_ids.get(service_name)
                 if cron_container_id:
+                    cron_job_name = f"cron-{service_name}-{pr_number}"
                     await self.cron_manager.setup_cron_job(
-                        f"cron-{service_name}-{pr_number}",
+                        cron_job_name,
                         service_def['schedule'],
                         service_def['run'],
                         cron_container_id
                     )
+                    cron_job_names.append(cron_job_name)
+
+        # Store cron job names in session metadata for cleanup
+        if cron_job_names:
+            session.metadata['cron_jobs'] = ','.join(cron_job_names)
     
     async def destroy_preview_environment(self, session: Session):
         """Clean up a preview environment"""
         # Clean up cron jobs
-        for service_name in session.ports.keys():
-            cron_job_name = f"cron-{service_name}-{session.pr_number}"
-            await self.cron_manager.cleanup_cron_job(cron_job_name)
-        
+        cron_job_names_str = session.metadata.get('cron_jobs')
+        if cron_job_names_str:
+            cron_job_names = cron_job_names_str.split(',')
+            for cron_job_name in cron_job_names:
+                await self.cron_manager.cleanup_cron_job(cron_job_name)
+
         # The base session manager will handle container and network cleanup
         await self.session_manager.destroy_session(session.id)
     

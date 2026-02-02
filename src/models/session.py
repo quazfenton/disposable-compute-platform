@@ -4,17 +4,17 @@ Session model for managing disposable compute environments
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import uuid
 
 
-class SessionType(Enum):
+class SessionType(str, Enum):
     PREVIEW = "preview"
     RUN_REPO = "run_repo"
     FORK_GUI = "fork_gui"
 
 
-class SessionStatus(Enum):
+class SessionStatus(str, Enum):
     CREATING = "creating"
     RUNNING = "running"
     STOPPED = "stopped"

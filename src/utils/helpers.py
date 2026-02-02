@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 import psutil
 import os
+import pathlib
 import subprocess
 from .config import settings
 
@@ -196,11 +197,14 @@ def get_gpu_info() -> Dict[str, Any]:
 
 def cleanup_temporary_files(pod_id: str):
     """Clean up temporary files associated with a pod"""
+    # Sanitize the pod_id to prevent path traversal
+    safe_pod_id = pathlib.Path(pod_id).name
+
     temp_dirs = [
-        f"{settings.storage_base_path}/temp/{pod_id}",
-        f"/tmp/disposable_compute_{pod_id}"
+        f"{settings.storage_base_path}/temp/{safe_pod_id}",
+        f"/tmp/disposable_compute_{safe_pod_id}"
     ]
-    
+
     for temp_dir in temp_dirs:
         try:
             if os.path.exists(temp_dir):

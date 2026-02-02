@@ -52,6 +52,7 @@ class PodRequest:
     min_memory_gb: int     # Minimum RAM
     storage_gb: int        # Storage requirement
     duration_estimate: int # Estimated runtime in minutes
+    priority: int          # Scheduling priority
     snapshot_id: str       # Optional: restore from snapshot
     project_files: list    # Optional: project files to mount
 ```
@@ -61,7 +62,7 @@ class PodRequest:
 ### 5.1 Node Scoring Function
 
 ```python
-def score_node(node: Node, pod_request: PodRequest) -> float:
+def score_node(node: Node, pod_request: PodRequest, user_location: Location) -> float:
     """
     Score a node for a pod request (higher is better)
     Returns a score between 0.0 and 1.0

@@ -448,31 +448,32 @@ The platform can be extended to support webhooks for GitHub integration:
 from fastapi import FastAPI, Request
 import hashlib
 import hmac
+import json
 
 @app.post("/webhooks/github")
 async def github_webhook(request: Request):
     # Verify webhook signature
     signature = request.headers.get('X-Hub-Signature-256')
     body = await request.body()
-    
+
     # Verify signature (implement your secret verification)
     expected_signature = "sha256=" + hmac.new(
-        secret.encode(), 
-        body, 
+        secret.encode(),
+        body,
         hashlib.sha256
     ).hexdigest()
-    
+
     if not hmac.compare_digest(signature, expected_signature):
         return {"error": "Invalid signature"}
-    
-    payload = await request.json()
-    
+
+    payload = json.loads(body)
+
     if payload.get("action") == "opened":
         pr = payload["pull_request"]
         repo_url = pr["head"]["repo"]["clone_url"]
         ref = pr["head"]["ref"]
         pr_number = payload["number"]
-        
+
         # Create preview environment
         session = await session_manager.create_session(
             session_type="preview",
@@ -480,9 +481,9 @@ async def github_webhook(request: Request):
             repo_ref=ref,
             pr_number=pr_number
         )
-        
+
         return {"message": f"Created preview for PR #{pr_number}", "session_id": session.id}
-    
+
     return {"message": "Webhook processed"}
 ```
 

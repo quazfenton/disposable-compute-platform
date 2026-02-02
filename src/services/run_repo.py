@@ -12,6 +12,7 @@ import json
 from src.models.session import Session, ServiceDefinition
 from src.models.environment import Environment
 from src.services.platform import SessionManager
+from src.types.platform_types import SessionStatus
 
 
 class RuntimeDetector:
@@ -186,10 +187,8 @@ class RunRepoManager:
         # Update session with container info
         session.container_id = json.dumps(container_ids)
         session.network_id = network_name
-from src.models.session import Session, ServiceDefinition, SessionStatus
-from src.models.environment import Environment
-from src.services.platform import SessionManager
-        
+        session.status = SessionStatus.RUNNING
+
         # Create external access
         if service.get('port'):
             url = self.session_manager.network_manager.create_external_access(

@@ -8,7 +8,8 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import tempfile
 
-from src.models.session import Session, Snapshot, SessionStatus
+from src.models.session import Session, SessionStatus
+from src.types.models import Snapshot
 from src.models.environment import Environment
 from src.services.platform import SessionManager, SnapshotManager
 
@@ -180,7 +181,8 @@ class ForkableSessionManager:
         session.container_id = json.dumps(container_ids)
         session.network_id = network_name
         session.status = SessionStatus.RUNNING
-        
+        session.metadata['app_type'] = app_type
+
         # Create external access
         url = self.session_manager.network_manager.create_external_access(
             session.id, 8080, self.session_manager.config.domain
@@ -246,7 +248,7 @@ class ForkableSessionManager:
             raise ValueError(f"Snapshot {snapshot_id} not found")
         
         # Create a new session for the fork
-        fork_session_id = f"fork-{session_id}-{datetime.now().strftime('%H%M%S')}"
+        fork_session_id = f"fork-{session_id}-{datetime.now().strftime('%H%M%S%f')}-{os.urandom(2).hex()}"
         
         fork_session = Session(
             id=fork_session_id,
@@ -342,7 +344,7 @@ async def extend_session_manager_with_forkable_gui(session_manager: SessionManag
     """Extend the session manager with forkable GUI capabilities"""
     snapshot_manager = session_manager.snapshot_manager if hasattr(session_manager, 'snapshot_manager') else None
     if not snapshot_manager:
-        from ..services.platform import SnapshotManager
+        from src.services.platform import SnapshotManager
         snapshot_manager = SnapshotManager(session_manager.config.storage_path)
         session_manager.snapshot_manager = snapshot_manager
     

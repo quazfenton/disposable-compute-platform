@@ -321,7 +321,7 @@ class HealthChecker:
         
         return results
     
-    async def check_system_health(self) -> bool:
+    async def check_system_health(self) -> Dict[str, Any]:
         """Check overall system health"""
         try:
             # Check CPU usage
@@ -344,7 +344,7 @@ class HealthChecker:
             self.logger.error(f"Error checking system health: {e}")
             return {"status": "error", "error": str(e)}
     
-    async def check_docker_health(self) -> bool:
+    async def check_docker_health(self) -> Dict[str, Any]:
         """Check Docker daemon health"""
         try:
             import docker
@@ -355,7 +355,7 @@ class HealthChecker:
             self.logger.error(f"Error checking Docker health: {e}")
             return {"status": "error", "error": str(e)}
     
-    async def check_libvirt_health(self) -> bool:
+    async def check_libvirt_health(self) -> Dict[str, Any]:
         """Check libvirt daemon health"""
         try:
             import libvirt

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import subprocess
 import os
+import xml.sax.saxutils
 
 from src.models.pod import Pod, PodSpec, PodStatus, PodType, GPUResource, ResourceRequirements
 from src.models.vm import VM, VMSpec, VMStatus, VMType, VMDisk, VMNetworkInterface, Hypervisor
@@ -59,8 +60,10 @@ class VMOrchestrator:
     def _generate_vm_xml(self, vm_spec: VMSpec, vm_disk_path: str) -> str:
         """Generate libvirt XML for VM configuration"""
         # This is a simplified XML template - in practice, this would be more complex
+        # Escape base_image to prevent XML injection
+        escaped_base_image = xml.sax.saxutils.escape(vm_spec.base_image)
         xml_template = f"""<domain type='kvm'>
-  <name>{vm_spec.base_image.replace(':', '_').replace('/', '_')}_vm_{datetime.now().strftime('%Y%m%d_%H%M%S')}</name>
+  <name>{escaped_base_image.replace(':', '_').replace('/', '_')}_vm_{datetime.now().strftime('%Y%m%d_%H%M%S')}</name>
   <memory unit='MiB'>{vm_spec.memory_mb}</memory>
   <currentMemory unit='MiB'>{vm_spec.memory_mb}</currentMemory>
   <vcpu placement='static'>{vm_spec.cpu_cores}</vcpu>
@@ -88,7 +91,7 @@ class VMOrchestrator:
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='none'/>
-      <source file='{vm_disk_path}'/>
+      <source file='{xml.sax.saxutils.escape(vm_disk_path)}'/>
       <target dev='vda' bus='virtio'/>
       <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
     </disk>
@@ -125,7 +128,7 @@ class VMOrchestrator:
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
     <graphics type='spice' autoport='yes'>
-      <listen type='address' address='0.0.0.0'/>
+      <listen type='address' address='127.0.0.1'/>
     </graphics>
     <video>
       <model type='qxl' ram='65536' vram='65536' vgamem='16384' heads='1' primary='yes'/>

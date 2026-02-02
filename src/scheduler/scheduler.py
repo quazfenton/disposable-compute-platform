@@ -322,12 +322,16 @@ class Scheduler:
         # Remove from running pods
         if pod_id in self.running_pods:
             node_id = self.running_pods.pop(pod_id)
-            
+
             # Get the pod spec to determine resource requirements
             # In a real implementation, we'd store this information
             # For now, we'll skip resource deallocation
-            
+
             self.logger.info(f"Unscheduled pod {pod_id} from node {node_id}")
+
+        # Also remove from scheduled_pods to prevent memory leak
+        if pod_id in self.scheduled_pods:
+            self.scheduled_pods.pop(pod_id)
     
     def add_node(self, node: ComputeNode):
         """Add a compute node to the scheduler"""

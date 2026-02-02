@@ -162,8 +162,12 @@ async def run_background_tasks():
             await asyncio.sleep(60)  # Wait 1 minute before retrying
 
 
-# Platform should be initialized explicitly by calling start_platform()
-# in an async context, e.g., during FastAPI lifespan or uvicorn startup
+
+# Initialize the platform when this module is loaded
+# Note: This was removed to avoid calling asyncio.create_task at module level
+# The platform will be initialized when the API starts
+pass
+
 
 
 # Example usage functions

@@ -22,10 +22,6 @@ mkdir -p /var/lib/disposable-compute/snapshots
 mkdir -p /var/lib/disposable-compute/containers
 mkdir -p /opt/disposable-compute-platform
 
-# Set permissions
-chown -R disposable-compute:disposable-compute /var/lib/disposable-compute
-chown -R disposable-compute:disposable-compute /opt/disposable-compute-platform
-
 # Install Python dependencies
 echo "Installing Python dependencies..."
 python3 -m venv /opt/disposable-compute-platform/venv
@@ -40,6 +36,10 @@ cp -r src /opt/disposable-compute-platform/
 cp requirements.txt /opt/disposable-compute-platform/
 cp -r deployment /opt/disposable-compute-platform/
 
+chown -R disposable-compute:disposable-compute /opt/disposable-compute-platform
+
+# Set permissions after copying files
+chown -R disposable-compute:disposable-compute /var/lib/disposable-compute
 chown -R disposable-compute:disposable-compute /opt/disposable-compute-platform
 
 # Copy service file
