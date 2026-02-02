@@ -296,9 +296,6 @@ async def extend_session_manager_with_preview(session_manager: SessionManager):
     """Extend the session manager with preview environment capabilities"""
     preview_manager = PreviewEnvironmentManager(session_manager)
     
-    # Override the preview session creation method
-    original_create_preview = session_manager._create_preview_session
-    
     async def new_create_preview_session(session: Session):
         await preview_manager.create_preview_environment(session)
     
