@@ -1,6 +1,11 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
+
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "This script must be run as root."
+  exit 1
+fi
 
 echo "Setting up Disposable Compute Platform..."
 
@@ -30,16 +35,12 @@ pip install -r requirements.txt
 
 # Copy application files
 echo "Copying application files..."
+rm -rf /opt/disposable-compute-platform/src
 cp -r src /opt/disposable-compute-platform/
-cp -r types /opt/disposable-compute-platform/
-cp -r utils /opt/disposable-compute-platform/
-cp -r orchestrator /opt/disposable-compute-platform/
-cp -r scheduler /opt/disposable-compute-platform/
-cp -r streaming /opt/disposable-compute-platform/
-cp -r storage /opt/disposable-compute-platform/
-cp -r networking /opt/disposable-compute-platform/
-cp -r api /opt/disposable-compute-platform/
-cp src/main.py /opt/disposable-compute-platform/
+cp requirements.txt /opt/disposable-compute-platform/
+cp -r deployment /opt/disposable-compute-platform/
+
+chown -R disposable-compute:disposable-compute /opt/disposable-compute-platform
 
 # Copy service file
 echo "Installing systemd service..."
@@ -49,8 +50,7 @@ cp deployment/disposable-compute-platform.service /etc/systemd/system/
 systemctl daemon-reload
 
 # Enable and start service
-systemctl enable disposable-compute-platform
-systemctl start disposable-compute-platform
+systemctl enable --now disposable-compute-platform
 
 echo "Setup complete!"
 echo "The Disposable Compute Platform is now running."
