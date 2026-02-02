@@ -32,7 +32,7 @@ class TestPodModel:
         pod = Pod(
             id="test-pod-123",
             spec=pod_spec,
-            status=PodStatus.CREATING,
+            status=PodStatus.REQUESTED,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
