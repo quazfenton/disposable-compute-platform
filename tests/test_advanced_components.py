@@ -99,7 +99,7 @@ class TestGPUModel:
         
         gpu_spec = GPUSpec(
             vendor=GPUVendor.NVIDIA,
-            family=GPUFamily.GEFORCE,
+            family=GPUFamily.GeForce,
             model="RTX 3080",
             memory_mb=10240,
             cuda_cores=8704
