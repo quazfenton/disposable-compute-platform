@@ -293,12 +293,8 @@ class CredentialManager:
 
             # Write the credential with restrictive permissions from the start to avoid race condition
             fd = os.open(cred_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-            try:
-                with os.fdopen(fd, 'w') as f:
-                    f.write(value)
-            except:
-                os.close(fd)
-                raise
+            with os.fdopen(fd, 'w') as f:
+                f.write(value)
 
             # Schedule cleanup
             # Store task reference to prevent GC and allow exception propagation
