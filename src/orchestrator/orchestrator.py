@@ -583,9 +583,16 @@ class AdvancedOrchestrator:
             # Clean up resources based on pod type
             if pod.spec.pod_type in [PodType.VM, PodType.HYBRID]:
                 # Clean up VM resources
-                if not self.vm_orchestrator:
-                    raise RuntimeError("VM functionality is not available. libvirt is not installed.")
-                    
+                if pod.vm_id and self.vm_orchestrator:
+                    try:
+                        self.vm_orchestrator.destroy_vm(pod.vm_id)
+                    except Exception as e:
+                        self.logger.warning(f"Error destroying VM for pod {pod_id}: {e}")
+                elif pod.vm_id and not self.vm_orchestrator:
+                    self.logger.warning(f"Cannot destroy VM for pod {pod_id}: libvirt not available")
+
+                # Clean up VM disk
+                if pod.vm_disk_path and os.path.exists(pod.vm_disk_path):
                 if pod.vm_id:
                     try:
                         self.vm_orchestrator.destroy_vm(pod.vm_id)
