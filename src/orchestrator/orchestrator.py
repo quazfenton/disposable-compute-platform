@@ -3,7 +3,6 @@ Advanced orchestrator for disposable compute platform with VM and GPU support
 """
 import asyncio
 import docker
-import libvirt
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
@@ -11,6 +10,14 @@ from datetime import datetime, timedelta
 import subprocess
 import os
 import xml.sax.saxutils
+
+# Optional import for libvirt (for VM support)
+try:
+    import libvirt
+    LIBVIRT_AVAILABLE = True
+except ImportError:
+    libvirt = None
+    LIBVIRT_AVAILABLE = False
 
 from src.models.pod import Pod, PodSpec, PodStatus, PodType, GPUResource, ResourceRequirements
 from src.models.vm import VM, VMSpec, VMStatus, VMType, VMDisk, VMNetworkInterface, Hypervisor
@@ -22,6 +29,9 @@ class VMOrchestrator:
     """Manages VM lifecycle for disposable environments"""
 
     def __init__(self, hypervisor_uri: str = "qemu:///system"):
+        if not LIBVIRT_AVAILABLE:
+            raise RuntimeError("libvirt is not available. Please install python-libvirt to use VM functionality.")
+        
         self.hypervisor_uri = hypervisor_uri
         self.conn = None
         self.logger = logging.getLogger(__name__)
@@ -381,7 +391,10 @@ class AdvancedOrchestrator:
 
     def __init__(self):
         self.container_orchestrator = ContainerOrchestrator()
-        self.vm_orchestrator = VMOrchestrator()
+        if LIBVIRT_AVAILABLE:
+            self.vm_orchestrator = VMOrchestrator()
+        else:
+            self.vm_orchestrator = None
         self.gpu_manager = GPUManager()
         self.pods: Dict[str, Pod] = {}
         self.logger = logging.getLogger(__name__)
@@ -445,6 +458,9 @@ class AdvancedOrchestrator:
 
     async def _create_vm_pod(self, pod: Pod):
         """Create a VM-based pod"""
+        if not self.vm_orchestrator:
+            raise RuntimeError("VM functionality is not available. libvirt is not installed.")
+            
         vm_id = None
         vm_disk_path = None
 
@@ -508,16 +524,18 @@ class AdvancedOrchestrator:
         """Start a pod"""
         if pod_id not in self.pods:
             raise ValueError(f"Pod {pod_id} not found")
-        
+
         pod = self.pods[pod_id]
-        
+
         if pod.spec.pod_type in [PodType.VM, PodType.HYBRID]:
+            if not self.vm_orchestrator:
+                raise RuntimeError("VM functionality is not available. libvirt is not installed.")
             if pod.vm_id:
                 self.vm_orchestrator.start_vm(pod.vm_id)
         else:  # Container
             if pod.container_id:
                 self.container_orchestrator.start_container(pod.container_id)
-        
+
         pod.status = PodStatus.RUNNING
         pod.updated_at = datetime.now()
 
@@ -525,16 +543,18 @@ class AdvancedOrchestrator:
         """Stop a pod"""
         if pod_id not in self.pods:
             raise ValueError(f"Pod {pod_id} not found")
-        
+
         pod = self.pods[pod_id]
-        
+
         if pod.spec.pod_type in [PodType.VM, PodType.HYBRID]:
+            if not self.vm_orchestrator:
+                raise RuntimeError("VM functionality is not available. libvirt is not installed.")
             if pod.vm_id:
                 self.vm_orchestrator.stop_vm(pod.vm_id)
         else:  # Container
             if pod.container_id:
                 self.container_orchestrator.stop_container(pod.container_id)
-        
+
         pod.status = PodStatus.STOPPED
         pod.updated_at = datetime.now()
 
@@ -563,6 +583,9 @@ class AdvancedOrchestrator:
             # Clean up resources based on pod type
             if pod.spec.pod_type in [PodType.VM, PodType.HYBRID]:
                 # Clean up VM resources
+                if not self.vm_orchestrator:
+                    raise RuntimeError("VM functionality is not available. libvirt is not installed.")
+                    
                 if pod.vm_id:
                     try:
                         self.vm_orchestrator.destroy_vm(pod.vm_id)
@@ -599,10 +622,13 @@ class AdvancedOrchestrator:
         """Get the status of a pod"""
         if pod_id not in self.pods:
             raise ValueError(f"Pod {pod_id} not found")
-        
+
         pod = self.pods[pod_id]
-        
+
         if pod.spec.pod_type in [PodType.VM, PodType.HYBRID]:
+            if not self.vm_orchestrator:
+                raise RuntimeError("VM functionality is not available. libvirt is not installed.")
+                
             if pod.vm_id:
                 return self._map_vm_status_to_pod_status(
                     self.vm_orchestrator.get_vm_status(pod.vm_id)
@@ -611,7 +637,7 @@ class AdvancedOrchestrator:
             # For containers, we'd need to check the container status
             # This is a simplified implementation
             pass
-        
+
         return pod.status
 
     def _map_vm_status_to_pod_status(self, vm_status: VMStatus) -> PodStatus:

@@ -72,9 +72,9 @@ class GPUDevice:
     memory_used_mb: int = 0
     memory_total_mb: int = 0
     allocated_to_pod: Optional[str] = None  # Pod ID if allocated
-    created_at: datetime = None
-    last_heartbeat: datetime = None
-    
+    created_at: Optional[datetime] = None
+    last_heartbeat: Optional[datetime] = None
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now()
@@ -88,12 +88,12 @@ class GPUAllocation:
     id: str
     pod_id: str
     gpu_device_id: str
-    allocation_time: datetime
+    allocation_time: Optional[datetime] = None
     release_time: Optional[datetime] = None
     status: str = "active"  # active, released, failed
     memory_requested_mb: Optional[int] = None
     compute_requested_percent: Optional[float] = None  # Percentage of compute to allocate
-    
+
     def __post_init__(self):
         if self.allocation_time is None:
             self.allocation_time = datetime.now()
@@ -122,10 +122,10 @@ class GPUCluster:
     total_gpus: int
     available_gpus: int
     allocated_gpus: int
-    gpu_types: List[str]  # List of GPU types available in the cluster
-    created_at: datetime = None
-    last_updated: datetime = None
-    
+    gpu_types: Optional[List[str]] = None  # List of GPU types available in the cluster
+    created_at: Optional[datetime] = None
+    last_updated: Optional[datetime] = None
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now()
@@ -143,14 +143,14 @@ class GPUJob:
     gpu_allocation_id: str
     job_type: str  # training, inference, rendering, etc.
     priority: int = 1  # Lower number means higher priority
-    created_at: datetime
+    created_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     status: str = "pending"  # pending, running, completed, failed, cancelled
     estimated_runtime_minutes: Optional[int] = None
     actual_runtime_minutes: Optional[int] = None
     metrics: Dict[str, Any] = None
-    
+
     def __post_init__(self):
         if self.metrics is None:
             self.metrics = {}
