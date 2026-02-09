@@ -67,7 +67,7 @@ class Settings(BaseSettings):
         if not getattr(self, '_jwt_secret_key', None):
             secret = os.getenv("JWT_SECRET_KEY")
             if not secret:
-                if os.getenv("DEBUG", "true").lower() == "true":
+                if os.getenv("DEBUG", "false").lower() == "true":
                     self._jwt_secret_key = "dev-secret-key-change-in-production"  # Only for development
                 else:
                     raise ValueError("JWT_SECRET_KEY environment variable must be set in production")
