@@ -101,7 +101,7 @@ class VMOrchestrator:
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='none'/>
-      <source file='{xml.sax.saxutils.escape(vm_disk_path)}'/>
+      <source file={xml.sax.saxutils.quoteattr(vm_disk_path)}/>
       <target dev='vda' bus='virtio'/>
       <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
     </disk>
