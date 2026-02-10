@@ -264,12 +264,13 @@ class PreviewEnvironmentManager:
         for service_name, service_def in preview_config.get('services', {}).items():
             if service_def.get('type') == 'cron' and 'schedule' in service_def:
                 cron_container_id = container_ids.get(service_name)
-                if cron_container_id:
+                cron_command = service_def.get('run') or service_def.get('command')
+                if cron_container_id and cron_command:
                     cron_job_name = f"cron-{service_name}-{pr_number}"
                     await self.cron_manager.setup_cron_job(
                         cron_job_name,
                         service_def['schedule'],
-                        service_def['run'],
+                        cron_command,
                         cron_container_id
                     )
                     cron_job_names.append(cron_job_name)
