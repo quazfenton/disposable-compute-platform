@@ -4,6 +4,7 @@ Advanced orchestrator for disposable compute platform with VM and GPU support
 import asyncio
 import docker
 import libvirt
+import os
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
@@ -591,7 +592,6 @@ class AdvancedOrchestrator:
             # Update pod status only if everything succeeded
             pod.status = PodStatus.TERMINATED
             pod.updated_at = datetime.now()
-
     async def get_pod_status(self, pod_id: str) -> PodStatus:
         """Get the status of a pod"""
         if pod_id not in self.pods:

@@ -45,22 +45,22 @@ class Settings(BaseSettings):
     pod_startup_timeout: int = 300  # seconds
     pod_idle_timeout: int = 3600  # seconds (1 hour)
     pod_max_runtime: int = 86400  # seconds (24 hours)
-    
+
     # Scheduler Settings
     scheduler_check_interval: int = 10  # seconds
     scheduler_max_attempts: int = 5
-    
+
     # Security Settings
     jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
-    
+    debug: str = os.getenv("DEBUG", "true").lower()
+
     # Logging Settings
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    
+
     class Config:
         env_file = ".env"
-
 
 settings = Settings()

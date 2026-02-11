@@ -230,16 +230,15 @@ class LoadBalancer:
         """Perform health checks for all backends of a service"""
         if service_id not in self.backends:
             return
-        
+
         for backend in self.backends[service_id]:
             is_healthy = await self._check_backend_health(backend)
             self.health_status[service_id][backend['id']] = is_healthy
-            
+
             if not is_healthy:
                 self.logger.warning(f"Backend {backend['id']} is unhealthy")
             else:
                 self.logger.debug(f"Backend {backend['id']} is healthy")
-
 
     async def _check_backend_health(self, backend: Dict[str, Any]) -> bool:
         """Check the health of a backend"""
@@ -248,11 +247,12 @@ class LoadBalancer:
             # In a real implementation, this would make an HTTP request to the health check path
             host = backend.get('host', 'localhost')
             port = backend.get('port', 80)
-            
-            # Check if port is open
+
+            # Check if port is open using a thread executor to avoid blocking the event loop
+            loop = asyncio.get_running_loop()
             with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
                 sock.settimeout(5)  # 5 second timeout
-                result = sock.connect_ex((host, port))
+                result = await loop.run_in_executor(None, sock.connect_ex, (host, port))
                 return result == 0
         except Exception:
             return False

@@ -292,9 +292,12 @@ class CredentialManager:
             
             # Write the credential
             with open(cred_file, 'w') as f:
-                f.write(value)
-            
-            # Set restrictive permissions (owner read/write only)
+                try:
+                    with os.fdopen(fd, 'w') as f:
+                        f.write(value)
+                except:
+                    os.close(fd)
+                    raise
             os.chmod(cred_file, 0o600)
             
             # Schedule cleanup
