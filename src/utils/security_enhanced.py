@@ -293,14 +293,20 @@ class CredentialManager:
             # Write the credential
             with open(cred_file, 'w') as f:
                 try:
-                    with os.fdopen(fd, 'w') as f:
+            try:
+                f = os.fdopen(fd, 'w')
+            except Exception:
+                os.close(fd)
+                raise
+            with f:
                         f.write(value)
                 except:
                     os.close(fd)
                     raise
             os.chmod(cred_file, 0o600)
             
-            # Schedule cleanup
+            loop = asyncio.get_event_loop()
+            task = loop.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
             asyncio.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
             
             self.logger.info(f"Stored credential for key: {key}")

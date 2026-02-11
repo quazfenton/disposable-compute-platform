@@ -580,6 +580,22 @@ class AdvancedOrchestrator:
                         self.container_orchestrator.remove_container(pod.container_id)
                     except Exception as e:
                         self.logger.warning(f"Error removing container for pod {pod_id}: {e}")
+        else:  # VM or Hybrid
+            # Clean up VM resources
+            if pod.vm_id and self.vm_orchestrator:
+                try:
+                    self.vm_orchestrator.destroy_vm(pod.vm_id)
+                except Exception as e:
+                    self.logger.warning(f"Error destroying VM for pod {pod_id}: {e}")
+            elif pod.vm_id and not self.vm_orchestrator:
+                self.logger.warning(f"Cannot destroy VM for pod {pod_id}: libvirt not available")
+
+            # Clean up VM disk
+            if pod.vm_disk_path and os.path.exists(pod.vm_disk_path):
+                try:
+                    os.remove(pod.vm_disk_path)
+                except Exception as e:
+                    self.logger.warning(f"Error removing VM disk for pod {pod_id}: {e}")
 
         except Exception as e:
             # Even if cleanup fails, update pod status to terminated
@@ -596,9 +612,8 @@ class AdvancedOrchestrator:
         """Get the status of a pod"""
         if pod_id not in self.pods:
             raise ValueError(f"Pod {pod_id} not found")
-        
+
         pod = self.pods[pod_id]
-        
         if pod.spec.pod_type in [PodType.VM, PodType.HYBRID]:
             if pod.vm_id:
                 return self._map_vm_status_to_pod_status(

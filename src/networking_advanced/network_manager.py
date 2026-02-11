@@ -250,7 +250,7 @@ class LoadBalancer:
 
             # Check if port is open using a thread executor to avoid blocking the event loop
             loop = asyncio.get_running_loop()
-            with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            result = await loop.run_in_executor(None, self._sync_check_port, host, port)
                 sock.settimeout(5)  # 5 second timeout
                 result = await loop.run_in_executor(None, sock.connect_ex, (host, port))
                 return result == 0
