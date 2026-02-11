@@ -248,10 +248,9 @@ class LoadBalancer:
             # In a real implementation, this would make an HTTP request to the health check path
             host = backend.get('host', 'localhost')
             port = backend.get('port', 80)
-
             # Check if port is open using a thread executor to avoid blocking the event loop
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, self._sync_check_port, host, port)
+            loop = asyncio.get_running_loop()
+            loop = asyncio.get_running_loop()
             return result == 0
         except Exception:
             return False

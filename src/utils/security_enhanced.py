@@ -293,15 +293,16 @@ class CredentialManager:
 
             # Write the credential with restrictive permissions from the start to avoid race condition
             fd = os.open(cred_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-            try:
-                with os.fdopen(fd, 'w') as f:
-                    f.write(value)
-            except:
-                os.close(fd)
-                raise
+            with os.fdopen(fd, 'w') as f:
+                f.write(value)
 
             # Schedule cleanup
-            asyncio.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
+            # Store task reference to prevent GC and allow exception propagation
+            if not hasattr(self, '_cleanup_tasks'):
+                self._cleanup_tasks = set()
+            task = asyncio.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
+            task.add_done_callback(self._cleanup_tasks.discard)
+            self._cleanup_tasks.add(task)
 
             self.logger.info(f"Stored credential for key: {key}")
             return str(cred_file)
