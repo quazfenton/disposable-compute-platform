@@ -5,18 +5,21 @@ from enum import Enum
 
 
 class PodStatus(str, Enum):
-    REQUESTED = "REQUESTED"
-    SCHEDULING = "SCHEDULING"
-    SCHEDULED = "SCHEDULED"
-    PROVISIONING = "PROVISIONING"
-    STARTING = "STARTING"
-    STREAMING = "STREAMING"
-    SNAPSHOT_CREATING = "SNAPSHOT_CREATING"
-    SNAPSHOT_COMPLETE = "SNAPSHOT_COMPLETE"
-    TERMINATING = "TERMINATING"
-    TERMINATED = "TERMINATED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
+    REQUESTED = "requested"
+    SCHEDULING = "scheduling"
+    SCHEDULED = "scheduled"
+    PROVISIONING = "provisioning"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    TERMINATING = "terminating"
+    TERMINATED = "terminated"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    STREAMING = "streaming"
+    SNAPSHOT_CREATING = "snapshot_creating"
+    SNAPSHOT_COMPLETE = "snapshot_complete"
 
 
 class AppType(str, Enum):
@@ -28,6 +31,7 @@ class AppType(str, Enum):
 class PodType(str, Enum):
     CONTAINER = "container"
     VM = "vm"
+    HYBRID = "hybrid"
 
 
 class SnapshotType(str, Enum):

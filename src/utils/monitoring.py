@@ -177,7 +177,7 @@ class MonitoringService:
             # Pod health
             total_pods = len(self.orchestrator.pods)
             active_pods = len([p for p in self.orchestrator.pods.values()
-                              if p.status.value in ['STARTING', 'STREAMING']])
+                              if p.status.value in ['starting', 'running']])
 
             health_status = {
                 "timestamp": datetime.now().isoformat(),

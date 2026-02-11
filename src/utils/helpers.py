@@ -199,6 +199,9 @@ def cleanup_temporary_files(pod_id: str):
     """Clean up temporary files associated with a pod"""
     # Sanitize the pod_id to prevent path traversal
     safe_pod_id = pathlib.Path(pod_id).name
+    if not safe_pod_id:
+        logging.error(f"Invalid pod_id provided for cleanup: {pod_id!r}")
+        return
 
     temp_dirs = [
         f"{settings.storage_base_path}/temp/{safe_pod_id}",

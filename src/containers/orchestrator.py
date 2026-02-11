@@ -58,7 +58,7 @@ class ContainerOrchestrator:
         except Exception as e:
             self.logger.error(f"Failed to remove network {network_id}: {e}")
     
-    def create_container(self, config: ContainerConfig) -> str:
+    def create_container(self, config: ContainerConfig) -> Dict[str, Any]:
         """Create a container with the given configuration"""
         try:
             container = self.client.containers.run(
@@ -75,7 +75,14 @@ class ContainerOrchestrator:
                 },
                 **(config.resource_limits or {})
             )
-            return container.id
+            
+            # Get the assigned host ports from container attributes
+            host_port_mapping = container.attrs['NetworkSettings']['Ports'] if container.attrs.get('NetworkSettings') else {}
+            
+            return {
+                'id': container.id,
+                'ports': host_port_mapping
+            }
         except Exception as e:
             self.logger.error(f"Failed to create container: {e}")
             raise
@@ -117,44 +124,45 @@ class ContainerOrchestrator:
             self.logger.error(f"Failed to get logs for container {container_id}: {e}")
             return ""
     
-    def create_environment_containers(self, environment: Environment) -> Dict[str, str]:
+    def create_environment_containers(self, environment: Environment) -> Dict[str, Dict[str, Any]]:
         """Create all containers for an environment"""
-        container_ids = {}
-        
+        container_info = {}
+
         for service_def in environment.services:
             service = ServiceDefinition(**service_def)
-            
+
             config = ContainerConfig(
                 image=service.image,
                 command=service.command,
                 environment=service.env,
                 volumes=service.volumes
             )
-            
+
             # Map ports if specified
             if service.port:
                 config.ports = {f"{service.port}/tcp": None}  # Let Docker assign external port
-            
-            container_id = self.create_container(config)
-            container_ids[service.name] = container_id
-            
+
+            container_result = self.create_container(config)
+            container_info[service.name] = container_result
+
             # Connect to environment network
             if environment.network_name:
                 network = self.client.networks.get(environment.network_name)
-                network.connect(container_id)
-        
-        return container_ids
+                network.connect(container_result['id'])
+
+        return container_info
     
-    def destroy_environment(self, environment: Environment, container_ids: Dict[str, str]):
+    def destroy_environment(self, environment: Environment, container_info: Dict[str, Dict[str, Any]]):
         """Destroy all containers and network for an environment"""
         # Stop and remove all containers
-        for container_id in container_ids.values():
+        for container_data in container_info.values():
+            container_id = container_data['id'] if isinstance(container_data, dict) else container_data
             try:
                 self.stop_container(container_id)
                 self.remove_container(container_id)
             except Exception as e:
                 self.logger.error(f"Error removing container {container_id}: {e}")
-        
+
         # Remove network
         if environment.network_name:
             try:

@@ -61,21 +61,14 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Validate JWT secret key
-        if not getattr(self, '_jwt_secret_key', None):
-            secret = os.getenv("JWT_SECRET_KEY")
-            if not secret:
-                if os.getenv("DEBUG", "false").lower() == "true":
-                    self._jwt_secret_key = "dev-secret-key-change-in-production"  # Only for development
-                else:
-                    raise ValueError("JWT_SECRET_KEY environment variable must be set in production")
-            else:
-                self._jwt_secret_key = secret
-
     @property
     def jwt_secret_key(self) -> str:
+        # Validate JWT secret key
+        if not hasattr(self, '_jwt_secret_key'):
+            secret = os.getenv("JWT_SECRET_KEY")
+            if not secret:
+                raise ValueError("JWT_SECRET_KEY environment variable must be set")
+            self._jwt_secret_key = secret
         return self._jwt_secret_key
 
 

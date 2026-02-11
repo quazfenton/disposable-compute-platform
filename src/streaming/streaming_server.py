@@ -84,7 +84,7 @@ class StreamEncoder:
             ]
             
             # Start the encoding process
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.encoding_processes[session_id] = proc
             
             self.logger.info(f"Started encoding for session {session_id}")
@@ -132,7 +132,7 @@ class StreamDecoder:
             ]
             
             # Start the decoding process
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.decoding_processes[session_id] = proc
             
             self.logger.info(f"Started decoding for session {session_id}")
@@ -391,40 +391,88 @@ class StreamServer:
     
     async def start_websocket_server(self, host: str = "0.0.0.0", port: int = 8765):
         """Start the WebSocket server for streaming"""
-        async def handler(websocket, path):
+        async def handler(websocket):
             # Extract session ID from path
+            path = websocket.path
             path_parts = path.strip('/').split('/')
             if len(path_parts) < 2 or path_parts[0] != 'stream':
                 await websocket.close(code=1008, reason="Invalid path")
                 return
-            
+
             session_id = path_parts[1]
             if session_id not in self.sessions:
                 await websocket.close(code=1008, reason="Session not found")
                 return
-            
+
             session = self.sessions[session_id]
             session.client_connection = str(websocket.remote_address)
-            
+
+            # Perform authentication - check if the connection is authorized
+            # In a real implementation, this would validate tokens, etc.
+            # For now, we'll just check if the session is active
+            if session.status != "active":
+                await websocket.close(code=1008, reason="Session not active")
+                return
+
             try:
                 async for message in websocket:
                     # Handle incoming messages (input events, control messages)
                     try:
                         data = json.loads(message)
+
+                        # Validate the data structure
+                        if not isinstance(data, dict):
+                            self.logger.warning(f"Invalid message format from session {session_id}")
+                            continue
+
+                        # Validate message type
+                        msg_type = data.get('type')
+                        if msg_type not in ['input', 'control']:
+                            self.logger.warning(f"Unknown message type: {msg_type}")
+                            continue
+
+                        # Validate and sanitize input events
+                        if msg_type == 'input':
+                            event = data.get('event', {})
+                            if not isinstance(event, dict):
+                                self.logger.warning(f"Invalid event format from session {session_id}")
+                                continue
+                            
+                            # Validate event type and sanitize coordinates/values
+                            event_type = event.get('type')
+                            if event_type not in ['mouse_move', 'mouse_click', 'keyboard', 'resize']:
+                                self.logger.warning(f"Invalid event type: {event_type}")
+                                continue
+                            
+                            # Validate and clamp coordinates to prevent malicious input
+                            if event_type in ['mouse_move', 'resize']:
+                                x = event.get('x', 0)
+                                y = event.get('y', 0)
+                                if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                                    self.logger.warning(f"Invalid coordinates in event from session {session_id}")
+                                    continue
+                                # Clamp to reasonable screen dimensions
+                                event['x'] = max(0, min(10000, x))  # Max 10k pixels
+                                event['y'] = max(0, min(10000, y))
+
+                            await self.handle_client_input(session_id, event)
                         
-                        if data.get('type') == 'input':
-                            await self.handle_client_input(session_id, data.get('event', {}))
-                        elif data.get('type') == 'control':
+                        elif msg_type == 'control':
+                            # Validate control message structure
+                            if not isinstance(data.get('subtype'), str):
+                                self.logger.warning(f"Invalid control message format from session {session_id}")
+                                continue
+                                
                             # Handle control messages like resize, quality adjustment
                             await self._handle_control_message(session_id, data)
                         else:
-                            self.logger.warning(f"Unknown message type: {data.get('type')}")
-                            
+                            self.logger.warning(f"Unknown message type: {msg_type}")
+
                     except json.JSONDecodeError:
                         self.logger.error(f"Invalid JSON received from session {session_id}")
                     except Exception as e:
                         self.logger.error(f"Error handling message from session {session_id}: {e}")
-                        
+
             except websockets.exceptions.ConnectionClosed:
                 self.logger.info(f"Client disconnected from session {session_id}")
             except Exception as e:

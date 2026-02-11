@@ -306,8 +306,14 @@ class HealthChecker:
         for name, check_func in self.checks.items():
             try:
                 result = await check_func() if asyncio.iscoroutinefunction(check_func) else check_func()
-                status = "healthy" if result else "unhealthy"
-                details = result if isinstance(result, dict) else {}
+                
+                # Check the status field if result is a dict with status, otherwise use truthiness
+                if isinstance(result, dict) and 'status' in result:
+                    status = result['status']
+                    details = result
+                else:
+                    status = "healthy" if result else "unhealthy"
+                    details = result if isinstance(result, dict) else {}
             except Exception as e:
                 status = "error"
                 details = {"error": str(e)}

@@ -29,6 +29,7 @@ class PreviewConfig:
     
     async def parse_from_repo(self, repo_url: str, repo_ref: Optional[str] = None) -> Dict[str, Any]:
         """Parse .preview.yaml from a repository"""
+        # TODO: Implement actual repository cloning and .preview.yaml parsing
         # In a real implementation, this would clone the repo and read the file
         # For now, we'll simulate this with a temporary approach
         
@@ -266,7 +267,7 @@ class PreviewEnvironmentManager:
                 cron_container_id = container_ids.get(service_name)
                 cron_command = service_def.get('run') or service_def.get('command')
                 if cron_container_id and cron_command:
-                    cron_job_name = f"cron-{service_name}-{pr_number}"
+                    cron_job_name = f"cron-{service_name}-{pr_number or 'default'}"
                     await self.cron_manager.setup_cron_job(
                         cron_job_name,
                         service_def['schedule'],

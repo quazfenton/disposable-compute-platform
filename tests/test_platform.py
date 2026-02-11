@@ -278,7 +278,12 @@ class TestForkableSessionManager:
         """Test creating a forkable GUI session"""
         config = PlatformConfig()
         session_manager = SessionManager(config)
-        
+
+        # Initialize snapshot manager if it doesn't exist
+        if not hasattr(session_manager, 'snapshot_manager'):
+            from src.services.platform import SnapshotManager
+            session_manager.snapshot_manager = SnapshotManager(config.storage_path)
+
         # Create a session first
         session = Session(
             id="test-session-fork-gui",
@@ -289,7 +294,7 @@ class TestForkableSessionManager:
             repo_url="https://github.com/test/gui-app.git"
         )
         session_manager.sessions[session.id] = session
-        
+
         manager = ForkableSessionManager(session_manager, session_manager.snapshot_manager)
         
         # This would normally create actual containers, but we're testing the structure

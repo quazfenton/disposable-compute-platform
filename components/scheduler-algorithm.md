@@ -241,7 +241,7 @@ def schedule_pod(pod_request: PodRequest) -> tuple[bool, str, Node]:
     # Score all valid nodes
     scored_nodes = []
     for node in valid_nodes:
-        score = score_node(node, pod_request)
+        score = score_node(node, pod_request, pod_request.user_location)
         scored_nodes.append((node, score))
     
     # Sort by score (descending)

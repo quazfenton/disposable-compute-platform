@@ -457,6 +457,7 @@ async def github_webhook(request: Request):
     body = await request.body()
 
     # Verify signature (implement your secret verification)
+    # secret = os.environ["GITHUB_WEBHOOK_SECRET"]  # Example: retrieve from environment
     expected_signature = "sha256=" + hmac.new(
         secret.encode(),
         body,

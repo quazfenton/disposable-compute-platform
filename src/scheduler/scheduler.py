@@ -103,8 +103,8 @@ class NodeSelector:
             return False
         
         # Check if GPU family is compatible
-        if gpu_req.gpu_type == GPUFamily.NVIDIA_TESLA and node.resources.gpu_type in [
-            GPUFamily.NVIDIA_TESLA, GPUFamily.NVIDIA_A100, GPUFamily.NVIDIA_H100, GPUFamily.NVIDIA_V100
+        if gpu_req.gpu_type == GPUFamily.TESLA and node.resources.gpu_type in [
+            GPUFamily.TESLA, GPUFamily.A100, GPUFamily.H100, GPUFamily.V100
         ]:
             return True
         elif gpu_req.gpu_type == node.resources.gpu_type:

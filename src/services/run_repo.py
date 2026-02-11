@@ -9,10 +9,9 @@ from datetime import datetime
 import subprocess
 import json
 
-from src.models.session import Session, ServiceDefinition
+from src.models.session import Session, ServiceDefinition, SessionStatus
 from src.models.environment import Environment
 from src.services.platform import SessionManager
-from src.types.platform_types import SessionStatus
 
 
 class RuntimeDetector:
@@ -162,7 +161,7 @@ class RunRepoManager:
             'port': runtime_info.get('port', 8080),
             'env': {
                 'PORT': str(runtime_info.get('port', 8080)),
-                'NODE_ENV': 'production' if runtime_info.get('language') == 'node' else ''
+                'NODE_ENV': 'production' if runtime_info.get('image', '').startswith('node:') else ''
             }
         }
         
@@ -244,8 +243,12 @@ async def extend_session_manager_with_run_repo(session_manager: SessionManager):
     
     # Override the run-repo session creation method
     original_create_run_repo = session_manager._create_run_repo_session
-    
+
     async def new_create_run_repo_session(session: Session):
+        # Call the original method first if it exists
+        if original_create_run_repo:
+            await original_create_run_repo(session)
+        # Then run our custom logic
         await run_repo_manager.create_run_repo_session(session)
-    
+
     session_manager._create_run_repo_session = new_create_run_repo_session

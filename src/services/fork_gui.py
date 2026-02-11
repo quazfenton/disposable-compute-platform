@@ -248,7 +248,7 @@ class ForkableSessionManager:
             raise ValueError(f"Snapshot {snapshot_id} not found")
         
         # Create a new session for the fork
-        fork_session_id = f"fork-{session_id}-{datetime.now().strftime('%H%M%S%f')}-{os.urandom(2).hex()}"
+        fork_session_id = f"fork-{session_id}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}-{os.urandom(4).hex()}"
         
         fork_session = Session(
             id=fork_session_id,

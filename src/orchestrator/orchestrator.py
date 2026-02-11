@@ -21,7 +21,7 @@ except ImportError:
 
 from src.models.pod import Pod, PodSpec, PodStatus, PodType, GPUResource, ResourceRequirements
 from src.models.vm import VM, VMSpec, VMStatus, VMType, VMDisk, VMNetworkInterface, Hypervisor
-from src.models.gpu import GPUDevice, GPUStatus, GPUAllocation, GPUConfiguration
+from src.models.gpu import GPUDevice, GPUStatus, GPUAllocation, GPUConfiguration, GPUFamily
 from src.containers.orchestrator import ContainerOrchestrator
 
 
@@ -591,15 +591,7 @@ class AdvancedOrchestrator:
                 elif pod.vm_id and not self.vm_orchestrator:
                     self.logger.warning(f"Cannot destroy VM for pod {pod_id}: libvirt not available")
 
-                # Clean up VM disk
-                if pod.vm_disk_path and os.path.exists(pod.vm_disk_path):
-                if pod.vm_id:
-                    try:
-                        self.vm_orchestrator.destroy_vm(pod.vm_id)
-                    except Exception as e:
-                        self.logger.warning(f"Error destroying VM for pod {pod_id}: {e}")
-
-                # Clean up VM disk
+                # Clean up VM disk regardless of whether VM was destroyed
                 if pod.vm_disk_path and os.path.exists(pod.vm_disk_path):
                     try:
                         os.remove(pod.vm_disk_path)
