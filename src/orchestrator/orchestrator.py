@@ -581,14 +581,13 @@ class AdvancedOrchestrator:
                     self.logger.warning(f"Error releasing GPU allocations for pod {pod_id}: {e}")
 
             # Clean up resources based on pod type
-            if pod.spec.pod_type in [PodType.VM, PodType.HYBRID]:
+            if pod.spec.pod_type in [PodType.VM, PodType.HYBRID] and pod.vm_id:
                 # Clean up VM resources
-                if pod.vm_id and self.vm_orchestrator:
+                if self.vm_orchestrator:
                     try:
                         self.vm_orchestrator.destroy_vm(pod.vm_id)
                     except Exception as e:
                         self.logger.warning(f"Error destroying VM for pod {pod_id}: {e}")
-                elif pod.vm_id and not self.vm_orchestrator:
                     self.logger.warning(f"Cannot destroy VM for pod {pod_id}: libvirt not available")
 
                 # Clean up VM disk

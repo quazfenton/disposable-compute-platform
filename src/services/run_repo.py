@@ -12,7 +12,7 @@ import json
 from src.models.session import Session, ServiceDefinition
 from src.models.environment import Environment
 from src.services.platform import SessionManager
-from src.types.platform_types import SessionStatus
+from src.models.session import SessionStatus
 
 
 class RuntimeDetector:

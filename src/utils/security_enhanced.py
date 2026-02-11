@@ -297,10 +297,20 @@ class CredentialManager:
                 f.write(value)
 
             # Schedule cleanup
-            # Store task reference to prevent GC and allow exception propagation
-            if not hasattr(self, '_cleanup_tasks'):
-                self._cleanup_tasks = set()
-            task = asyncio.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
+            try:
+                # Only schedule async cleanup if there is a running event loop
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running event loop; rely on explicit deletion instead of failing
+                self.logger.warning(
+                    "No running asyncio event loop; skipping automatic cleanup for credential file %s",
+                    cred_file,
+                )
+            else:
+                # Store task reference to prevent GC and allow exception propagation
+                if not hasattr(self, '_cleanup_tasks'):
+                    self._cleanup_tasks = set()
+                task = loop.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
             task.add_done_callback(self._cleanup_tasks.discard)
             self._cleanup_tasks.add(task)
 
