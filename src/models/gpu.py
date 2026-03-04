@@ -1,7 +1,9 @@
 """
 GPU model for managing GPU resources in disposable compute environments
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+, field
+
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Any
@@ -26,10 +28,16 @@ class GPUFamily(Enum):
     # NVIDIA families
     TESLA = "tesla"
     QUADRO = "quadro"
-    GeForce = "geforce"
+    GEFORCE = "geforce"
     A100 = "a100"
     H100 = "h100"
     V100 = "v100"
+    
+    # Compatibility aliases/families
+    NVIDIA_TESLA = "tesla"
+    NVIDIA_A100 = "a100"
+    NVIDIA_H100 = "h100"
+    NVIDIA_V100 = "v100"
     
     # AMD families
     INSTINCT = "instinct"
@@ -39,6 +47,7 @@ class GPUFamily(Enum):
     # Intel families
     DATA_CENTER_GPU = "data-center-gpu"
     ARC = "arc"
+
 
 
 @dataclass
@@ -106,11 +115,7 @@ class GPUConfiguration:
     count: int = 1
     memory_limit_mb: Optional[int] = None
     use_exclusive_mode: bool = False
-    driver_capabilities: List[str] = None  # compute, graphics, display, utility, etc.
-    
-    def __post_init__(self):
-        if self.driver_capabilities is None:
-            self.driver_capabilities = ["compute"]
+    driver_capabilities: List[str] = field(default_factory=lambda: ["compute"])
 
 
 @dataclass
@@ -122,7 +127,7 @@ class GPUCluster:
     total_gpus: int
     available_gpus: int
     allocated_gpus: int
-    gpu_types: Optional[List[str]] = None  # List of GPU types available in the cluster
+    gpu_types: List[str] = field(default_factory=list)  # List of GPU types available in the cluster
     created_at: Optional[datetime] = None
     last_updated: Optional[datetime] = None
 
@@ -131,8 +136,6 @@ class GPUCluster:
             self.created_at = datetime.now()
         if self.last_updated is None:
             self.last_updated = datetime.now()
-        if self.gpu_types is None:
-            self.gpu_types = []
 
 
 @dataclass
@@ -149,10 +152,8 @@ class GPUJob:
     status: str = "pending"  # pending, running, completed, failed, cancelled
     estimated_runtime_minutes: Optional[int] = None
     actual_runtime_minutes: Optional[int] = None
-    metrics: Dict[str, Any] = None
+    metrics: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        if self.metrics is None:
-            self.metrics = {}
         if self.created_at is None:
             self.created_at = datetime.now()

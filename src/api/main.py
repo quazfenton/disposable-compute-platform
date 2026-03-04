@@ -78,8 +78,15 @@ class ConnectionManager:
             await connection.send_text(message)
 
 
+from src.utils.logging_config import setup_logging, get_logger
+
+# Initialize logging
+setup_logging()
+logger = get_logger(__name__)
+
 # Initialize the API
-app = FastAPI(title="Disposable Compute Platform API", version="1.0.0")
+app = FastAPI(title="Vanish Compute (VNC) API", version="1.0.0")
+
 
 # Add CORS middleware
 app.add_middleware(

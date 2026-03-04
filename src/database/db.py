@@ -66,8 +66,27 @@ class MockPool:
         }
     
     async def execute(self, query: str, *args) -> str:
-        """Mock execute"""
+        """Mock execute with basic DELETE and UPDATE support"""
+        query_upper = query.upper()
+        if "DELETE FROM" in query_upper:
+            # Simple heuristic for DELETE FROM table WHERE id = $1
+            table = None
+            if "SESSIONS" in query_upper: table = "sessions"
+            elif "USERS" in query_upper: table = "users"
+            elif "PODS" in query_upper: table = "pods"
+            
+            if table and args:
+                item_id = str(args[0])
+                if item_id in self._data[table]:
+                    del self._data[table][item_id]
+                    return "DELETE 1"
+            return "DELETE 0"
+            
+        elif "UPDATE" in query_upper:
+            return "UPDATE 1"
+            
         return "OK"
+
     
     async def fetch(self, query: str, *args) -> List[Dict]:
         """Mock fetch"""
@@ -82,9 +101,42 @@ class MockPool:
         return []
     
     async def fetchrow(self, query: str, *args) -> Optional[Dict]:
-        """Mock fetchrow"""
+        """Mock fetchrow with basic INSERT support using UUIDs"""
+        query_upper = query.upper()
+        if "INSERT INTO" in query_upper:
+            import uuid
+            table = None
+            if "USERS" in query_upper: table = "users"
+            elif "SESSIONS" in query_upper: table = "sessions"
+            elif "PODS" in query_upper: table = "pods"
+            elif "SNAPSHOTS" in query_upper: table = "snapshots"
+            
+            if table:
+                item_id = str(uuid.uuid4())
+                row = {
+                    'id': item_id,
+                    'created_at': datetime.utcnow(),
+                    'updated_at': datetime.utcnow(),
+                }
+                
+                # Basic mapping of positional args to mock columns
+                if table == "users":
+                    row.update({'email': args[0], 'tier': args[1]})
+                elif table == "sessions":
+                    row.update({'type': args[0], 'user_id': args[1], 'status': 'creating'})
+                elif table == "pods":
+                    row.update({'session_id': args[0], 'status': 'pending'})
+                
+                self._data[table][item_id] = row
+                return row
+
         results = await self.fetch(query, *args)
+        if "SELECT * FROM sessions WHERE id = $1" in query:
+             return self._data['sessions'].get(args[0])
+        elif "SELECT * FROM users WHERE id = $1" in query:
+             return self._data['users'].get(args[0])
         return results[0] if results else None
+
     
     async def fetchval(self, query: str, *args) -> Any:
         """Mock fetchval"""
@@ -103,9 +155,10 @@ class Database:
     
     def __init__(self, config: DatabaseConfig):
         self.config = config
-        self._pool: Optional[asyncpg.Pool] = None
+        self._pool: Optional[Any] = None
         self._mock_pool: Optional[MockPool] = None
         self._connected = False
+
     
     async def connect(self):
         """Initialize database connection"""
@@ -160,7 +213,7 @@ class Database:
             raise RuntimeError("Database not connected")
     
     # User operations
-    async def create_user(self, email: str, tier: str = "free", **kwargs) -> User:
+    async def create_user(self, email: str, tier: str = "free", **kwargs) -> Optional[User]:
         """Create a new user"""
         async with self.acquire() as conn:
             row = await conn.fetchrow(
@@ -171,7 +224,9 @@ class Database:
                 """,
                 email, tier, json.dumps(kwargs.get('metadata', {}))
             )
-            return User.from_row(dict(row)) if row else None
+            if row:
+                return User.from_row(dict(row))
+            return None
     
     async def get_user(self, user_id: str) -> Optional[User]:
         """Get user by ID"""
@@ -180,7 +235,9 @@ class Database:
                 "SELECT * FROM users WHERE id = $1",
                 user_id
             )
-            return User.from_row(dict(row)) if row else None
+            if row:
+                return User.from_row(dict(row))
+            return None
     
     async def get_user_by_email(self, email: str) -> Optional[User]:
         """Get user by email"""
@@ -189,17 +246,20 @@ class Database:
                 "SELECT * FROM users WHERE email = $1",
                 email
             )
-            return User.from_row(dict(row)) if row else None
+            if row:
+                return User.from_row(dict(row))
+            return None
+
     
     # Session operations
     async def create_session(
         self,
         session_type: SessionType,
         user_id: str,
-        config: Dict[str, Any] = None,
+        config: Optional[Dict[str, Any]] = None,
         ttl_minutes: int = 60,
         **kwargs
-    ) -> Session:
+    ) -> Optional[Session]:
         """Create a new session"""
         expires_at = datetime.utcnow()
         from datetime import timedelta
@@ -222,13 +282,12 @@ class Database:
                 json.dumps(kwargs.get('metadata', {}))
             )
             
-            session = Session.from_row(dict(row)) if row else None
-            
-            # Log event
-            if session:
+            if row:
+                session = Session.from_row(dict(row))
                 await self.log_event('session', session.id, 'created', {'type': session_type.value})
-            
-            return session
+                return session
+            return None
+
     
     async def get_session(self, session_id: str) -> Optional[Session]:
         """Get session by ID"""
@@ -300,9 +359,9 @@ class Database:
         self,
         session_id: str,
         spec: Dict[str, Any],
-        node_id: str = None,
+        node_id: Optional[str] = None,
         **kwargs
-    ) -> Pod:
+    ) -> Optional[Pod]:
         """Create a new pod"""
         async with self.acquire() as conn:
             row = await conn.fetchrow(
@@ -317,12 +376,12 @@ class Database:
                 json.dumps(kwargs.get('metadata', {}))
             )
             
-            pod = Pod.from_row(dict(row)) if row else None
-            
-            if pod:
+            if row:
+                pod = Pod.from_row(dict(row))
                 await self.log_event('pod', pod.id, 'created', {'session_id': session_id})
-            
-            return pod
+                return pod
+            return None
+
     
     async def get_pod(self, pod_id: str) -> Optional[Pod]:
         """Get pod by ID"""
@@ -331,9 +390,13 @@ class Database:
                 "SELECT * FROM pods WHERE id = $1",
                 pod_id
             )
-            return Pod.from_row(dict(row)) if row else None
+            if row:
+                return Pod.from_row(dict(row))
+            return None
+
     
-    async def update_pod_status(self, pod_id: str, status: str, node_id: str = None) -> bool:
+    async def update_pod_status(self, pod_id: str, status: str, node_id: Optional[str] = None) -> bool:
+
         """Update pod status"""
         async with self.acquire() as conn:
             if node_id:
@@ -383,9 +446,9 @@ class Database:
         snapshot_type: SnapshotType,
         storage_path: str,
         size_bytes: int = 0,
-        parent_id: str = None,
-        metadata: Dict[str, Any] = None
-    ) -> Snapshot:
+        parent_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[Snapshot]:
         """Create a new snapshot"""
         async with self.acquire() as conn:
             row = await conn.fetchrow(
@@ -402,12 +465,12 @@ class Database:
                 json.dumps(metadata or {})
             )
             
-            snapshot = Snapshot.from_row(dict(row)) if row else None
-            
-            if snapshot:
+            if row:
+                snapshot = Snapshot.from_row(dict(row))
                 await self.log_event('snapshot', snapshot.id, 'created', {'type': snapshot_type.value})
-            
-            return snapshot
+                return snapshot
+            return None
+
     
     async def get_snapshot(self, snapshot_id: str) -> Optional[Snapshot]:
         """Get snapshot by ID"""
@@ -416,7 +479,10 @@ class Database:
                 "SELECT * FROM snapshots WHERE id = $1",
                 snapshot_id
             )
-            return Snapshot.from_row(dict(row)) if row else None
+            if row:
+                return Snapshot.from_row(dict(row))
+            return None
+
     
     async def get_pod_snapshots(self, pod_id: str) -> List[Snapshot]:
         """Get all snapshots for a pod"""
@@ -515,7 +581,8 @@ async def get_database() -> Database:
     return _db
 
 
-async def init_database(config: DatabaseConfig = None) -> Database:
+async def init_database(config: Optional[DatabaseConfig] = None) -> Database:
+
     """Initialize the global database instance"""
     global _db
     

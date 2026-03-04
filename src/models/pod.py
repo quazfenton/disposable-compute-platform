@@ -1,7 +1,8 @@
 """
 Pod model for managing disposable compute environments with VM and GPU support
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Any
@@ -12,6 +13,8 @@ class PodType(Enum):
     CONTAINER = "container"
     VM = "vm"
     HYBRID = "hybrid"
+    MICROVM = "microvm"
+
 
 
 class PodStatus(Enum):
@@ -65,24 +68,14 @@ class PodSpec:
     app_version: str = "latest"
     image: str = ""
     command: Optional[List[str]] = None
-    environment: Dict[str, str] = None
-    resource_requirements: ResourceRequirements = None
+    environment: Dict[str, str] = field(default_factory=dict)
+    resource_requirements: ResourceRequirements = field(default_factory=ResourceRequirements)
     gpu_required: bool = False
     gpu_config: Optional[GPUResource] = None
-    ports: List[int] = None
-    volumes: List[str] = None
+    ports: List[int] = field(default_factory=list)
+    volumes: List[str] = field(default_factory=list)
     network_mode: str = "bridge"
     privileged: bool = False
-    
-    def __post_init__(self):
-        if self.environment is None:
-            self.environment = {}
-        if self.resource_requirements is None:
-            self.resource_requirements = ResourceRequirements()
-        if self.ports is None:
-            self.ports = []
-        if self.volumes is None:
-            self.volumes = []
 
 
 @dataclass
@@ -106,17 +99,12 @@ class Pod:
 
     # Resource tracking
     assigned_resources: Optional[ResourceRequirements] = None
-    resource_usage: Dict[str, Any] = None
+    resource_usage: Dict[str, Any] = field(default_factory=dict)
 
     # Metadata
-    metadata: Dict[str, str] = None
+    metadata: Dict[str, str] = field(default_factory=dict)
     failure_reason: Optional[str] = None
 
-    def __post_init__(self):
-        if self.resource_usage is None:
-            self.resource_usage = {}
-        if self.metadata is None:
-            self.metadata = {}
 
 
 @dataclass

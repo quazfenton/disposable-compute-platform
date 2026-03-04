@@ -5,6 +5,8 @@ import asyncio
 import os
 import tempfile
 import yaml
+import logging
+from git import Repo
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import subprocess
@@ -16,7 +18,9 @@ from src.models.environment import Environment
 from src.services.platform import SessionManager
 from src.containers.orchestrator import ContainerOrchestrator
 from src.networking.router import NetworkManager
+from src.utils.input_validation import validate_repo_url, validate_ref_name
 
+logger = logging.getLogger(__name__)
 
 class PreviewConfig:
     """Handles parsing and validation of .preview.yaml files"""
@@ -27,42 +31,42 @@ class PreviewConfig:
             'entrypoints': {}
         }
     
-    async def parse_from_repo(self, repo_url: str, repo_ref: Optional[str] = None) -> Dict[str, Any]:
+    async def parse_from_repo(self, repo_url: Optional[str], repo_ref: Optional[str] = None) -> Dict[str, Any]:
         """Parse .preview.yaml from a repository"""
-        # TODO: Implement actual repository cloning and .preview.yaml parsing
-        # In a real implementation, this would clone the repo and read the file
-        # For now, we'll simulate this with a temporary approach
-        
-        # Create a mock .preview.yaml content
-        preview_config = {
-            'services': {
-                'api': {
-                    'type': 'web',
-                    'port': 3000,
-                    'run': 'npm run dev',
-                    'image': 'node:18-alpine'
-                },
-                'worker': {
-                    'type': 'worker',
-                    'run': 'python worker.py',
-                    'image': 'python:3.11-slim'
-                },
-                'db': {
-                    'type': 'postgres',
-                    'version': '15',
-                    'image': 'postgres:15-alpine'
-                },
-                'redis': {
-                    'type': 'cache',
-                    'image': 'redis:alpine'
-                }
-            },
-            'entrypoints': {
-                'terminal': 'api'
-            }
-        }
-        
-        return preview_config
+        if not repo_url:
+            return self.default_config
+            
+        # Sanitize inputs
+        is_valid, error = validate_repo_url(repo_url)
+        if not is_valid:
+            logger.error(f"Invalid repo URL in preview: {error}")
+            return self.default_config
+            
+        if repo_ref:
+            is_valid, error = validate_ref_name(repo_ref)
+            if not is_valid:
+                logger.error(f"Invalid repo ref in preview: {error}")
+                return self.default_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            try:
+                # Clone the repository
+                await asyncio.to_thread(Repo.clone_from, repo_url, tmp_dir)
+                if repo_ref:
+                    repo = Repo(tmp_dir)
+                    await asyncio.to_thread(repo.git.checkout, repo_ref)
+                
+                preview_yaml_path = os.path.join(tmp_dir, '.preview.yaml')
+                if not os.path.exists(preview_yaml_path):
+                    return self.default_config
+                
+                with open(preview_yaml_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                    return config or self.default_config
+            except Exception as e:
+                logger.error(f"Error parsing .preview.yaml: {e}")
+                return self.default_config
+
     
     def validate_config(self, config: Dict[str, Any]) -> bool:
         """Validate the preview configuration"""
@@ -185,7 +189,7 @@ class PreviewEnvironmentManager:
         internal_dns = self.session_manager.network_manager.setup_internal_dns(
             network_name, services
         )
-        environment.metadata['internal_dns'] = internal_dns
+        environment.metadata['internal_dns'] = json.dumps(internal_dns)
         
         # Create containers for all services
         container_ids = self.session_manager.container_orchestrator.create_environment_containers(environment)
@@ -194,6 +198,7 @@ class PreviewEnvironmentManager:
         await self._setup_special_services(
             session, preview_config, container_ids, session.pr_number
         )
+
         
         # Create external access URLs
         external_urls = []
@@ -258,15 +263,17 @@ class PreviewEnvironmentManager:
         
         return service_def
     
-    async def _setup_special_services(self, session: Session, preview_config: Dict[str, Any], container_ids: Dict[str, str], pr_number: Optional[int]):
+    async def _setup_special_services(self, session: Session, preview_config: Dict[str, Any], container_ids: Dict[str, Dict[str, Any]], pr_number: Optional[int]):
         """Setup special services like cron jobs"""
         # Handle cron jobs
         cron_job_names = []
         for service_name, service_def in preview_config.get('services', {}).items():
             if service_def.get('type') == 'cron' and 'schedule' in service_def:
-                cron_container_id = container_ids.get(service_name)
+                cron_container_data = container_ids.get(service_name)
+                cron_container_id = cron_container_data.get('id') if cron_container_data else None
                 cron_command = service_def.get('run') or service_def.get('command')
                 if cron_container_id and cron_command:
+
                     cron_job_name = f"cron-{service_name}-{pr_number or 'default'}"
                     await self.cron_manager.setup_cron_job(
                         cron_job_name,

@@ -1,339 +1,398 @@
 """
-Authentication and authorization for disposable compute platform
+Authentication and Authorization module for disposable compute platform
 """
 import os
-import time
-import logging
-import hashlib
 import secrets
-from typing import Optional, Dict, Any, Tuple, List
+import jwt
+import logging
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from typing import Optional, Dict, Any, List
 from functools import wraps
-import json
-
-# Try imports
-try:
-    import jwt
-    JWT_AVAILABLE = True
-except ImportError:
-    jwt = None
-    JWT_AVAILABLE = False
-
+from fastapi import Depends, HTTPException, status, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, Field
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# Security schemes
+security = HTTPBearer(auto_error=False)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-@dataclass
-class User:
-    """Authenticated user"""
+
+class UserTier(str, Enum):
+    FREE = "free"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
+
+class User(BaseModel):
+    """User model"""
     id: str
     email: str
-    tier: str
-    quota_sessions_per_day: int = 10
-    quota_max_ttl_minutes: int = 120
-    
-    def can_create_session(self, current_sessions: int) -> bool:
-        """Check if user can create more sessions"""
-        return current_sessions < self.quota_sessions_per_day
-    
-    def get_max_ttl(self) -> int:
-        """Get maximum TTL for user's sessions"""
-        return self.quota_max_ttl_minutes
-
-
-@dataclass
-class APIKey:
-    """API key for programmatic access"""
-    key: str
-    user_id: str
-    name: str
-    created_at: datetime
-    expires_at: Optional[datetime] = None
-    scopes: list = None
+    tier: UserTier = UserTier.FREE
+    session_quota: int = 5
+    max_session_ttl: int = 60  # minutes
+    created_at: datetime = None
+    metadata: Dict[str, Any] = None
     
     def __post_init__(self):
-        if self.scopes is None:
-            self.scopes = ["read", "write"]
+        if self.created_at is None:
+            self.created_at = datetime.utcnow()
+        if self.metadata is None:
+            self.metadata = {}
     
-    def is_expired(self) -> bool:
-        """Check if API key is expired"""
-        if self.expires_at is None:
-            return False
-        return datetime.utcnow() > self.expires_at
-    
-    def has_scope(self, scope: str) -> bool:
-        """Check if key has a scope"""
-        return scope in self.scopes or "admin" in self.scopes
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "User":
+        """Create user from dictionary"""
+        return cls(**data)
 
 
-class AuthConfig:
-    """Authentication configuration"""
-    def __init__(self):
-        self.jwt_secret = os.getenv("JWT_SECRET", secrets.token_hex(32))
-        self.jwt_algorithm = "HS256"
-        self.jwt_expire_hours = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
-        self.api_key_header = "X-API-Key"
-        self.bearer_header = "Authorization"
-
-
-class TokenManager:
-    """Manages JWT tokens"""
-    
-    def __init__(self, config: AuthConfig):
-        self.config = config
-    
-    def create_token(self, user: User) -> str:
-        """Create a JWT token for a user"""
-        if not JWT_AVAILABLE:
-            raise RuntimeError("PyJWT not installed. Run: pip install PyJWT")
-        
-        payload = {
-            "sub": user.id,
-            "email": user.email,
-            "tier": user.tier,
-            "iat": datetime.utcnow(),
-            "exp": datetime.utcnow() + timedelta(hours=self.config.jwt_expire_hours)
-        }
-        
-        return jwt.encode(payload, self.config.jwt_secret, algorithm=self.config.jwt_algorithm)
-    
-    def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """Verify and decode a JWT token"""
-        if not JWT_AVAILABLE:
-            logger.warning("PyJWT not installed, token verification disabled")
-            return None
-        
-        try:
-            payload = jwt.decode(
-                token,
-                self.config.jwt_secret,
-                algorithms=[self.config.jwt_algorithm]
-            )
-            return payload
-        except jwt.ExpiredSignatureError:
-            logger.warning("Token expired")
-            return None
-        except jwt.InvalidTokenError as e:
-            logger.warning(f"Invalid token: {e}")
-            return None
-    
-    def get_user_from_token(self, token: str) -> Optional[User]:
-        """Extract user from token"""
-        payload = self.verify_token(token)
-        if not payload:
-            return None
-        
-        return User(
-            id=payload.get("sub"),
-            email=payload.get("email"),
-            tier=payload.get("tier", "free")
-        )
-
-
-class APIKeyManager:
-    """Manages API keys"""
-    
-    def __init__(self):
-        self._keys: Dict[str, APIKey] = {}
-        self._user_keys: Dict[str, list] = {}  # user_id -> [key, ...]
-    
-    def generate_key(self, user_id: str, name: str, expires_days: int = None, scopes: list = None) -> APIKey:
-        """Generate a new API key"""
-        # Generate secure random key
-        key_bytes = secrets.token_bytes(32)
-        key = f"dcp_{secrets.token_urlsafe(32)}"
-        
-        expires_at = None
-        if expires_days:
-            expires_at = datetime.utcnow() + timedelta(days=expires_days)
-        
-        api_key = APIKey(
-            key=key,
-            user_id=user_id,
-            name=name,
-            created_at=datetime.utcnow(),
-            expires_at=expires_at,
-            scopes=scopes or ["read", "write"]
-        )
-        
-        self._keys[key] = api_key
-        
-        if user_id not in self._user_keys:
-            self._user_keys[user_id] = []
-        self._user_keys[user_id].append(api_key)
-        
-        logger.info(f"Created API key '{name}' for user {user_id}")
-        return api_key
-    
-    def verify_key(self, key: str) -> Optional[APIKey]:
-        """Verify an API key"""
-        api_key = self._keys.get(key)
-        
-        if not api_key:
-            return None
-        
-        if api_key.is_expired():
-            logger.warning(f"API key {api_key.key[:10]}... is expired")
-            return None
-        
-        return api_key
-    
-    def revoke_key(self, key: str) -> bool:
-        """Revoke an API key"""
-        if key in self._keys:
-            api_key = self._keys[key]
-            del self._keys[key]
-            
-            if api_key.user_id in self._user_keys:
-                self._user_keys[api_key.user_id] = [
-                    k for k in self._user_keys[api_key.user_id] if k.key != key
-                ]
-            
-            logger.info(f"Revoked API key {key[:10]}...")
-            return True
-        
-        return False
-    
-    def list_user_keys(self, user_id: str) -> list:
-        """List API keys for a user"""
-        return self._user_keys.get(user_id, [])
-
-
-class SessionQuotaManager:
-    """Manages session quotas for users"""
-    
-    def __init__(self):
-        self._counts: Dict[str, Dict[str, Any]] = {}  # user_id -> {date, count}
-    
-    def check_quota(self, user: User) -> Tuple[bool, str]:
-        """Check if user has quota available"""
-        today = datetime.utcnow().date().isoformat()
-        
-        if user.id not in self._counts:
-            self._counts[user.id] = {"date": today, "count": 0}
-        
-        user_data = self._counts[user.id]
-        
-        # Reset counter for new day
-        if user_data["date"] != today:
-            user_data["date"] = today
-            user_data["count"] = 0
-        
-        if user_data["count"] >= user.quota_sessions_per_day:
-            return False, f"Daily quota exceeded ({user.quota_sessions_per_day} sessions/day)"
-        
-        return True, "Quota available"
-    
-    def increment_quota(self, user_id: str):
-        """Increment session count for user"""
-        today = datetime.utcnow().date().isoformat()
-        
-        if user_id not in self._counts:
-            self._counts[user_id] = {"date": today, "count": 0}
-        
-        user_data = self._counts[user_id]
-        
-        if user_data["date"] != today:
-            user_data["date"] = today
-            user_data["count"] = 0
-        
-        user_data["count"] += 1
-    
-    def get_usage(self, user_id: str) -> Dict[str, Any]:
-        """Get quota usage for user"""
-        today = datetime.utcnow().date().isoformat()
-        
-        if user_id not in self._counts:
-            return {"date": today, "count": 0}
-        
-        user_data = self._counts[user_id]
-        
-        if user_data["date"] != today:
-            return {"date": today, "count": 0}
-        
-        return user_data.copy()
+class TokenData(BaseModel):
+    """JWT token payload"""
+    user_id: str
+    email: str
+    tier: str
+    exp: datetime
+    iat: datetime
 
 
 class AuthManager:
-    """Main authentication manager"""
+    """Manages authentication and authorization"""
     
-    def __init__(self, config: AuthConfig = None):
-        self.config = config or AuthConfig()
-        self.token_manager = TokenManager(self.config)
-        self.api_key_manager = APIKeyManager()
-        self.quota_manager = SessionQuotaManager()
+    def __init__(
+        self, 
+        secret_key: Optional[str] = None,
+        algorithm: str = "HS256",
+        token_expiry_minutes: int = 1440,  # 24 hours
+        database: Any = None
+    ):
+        self.secret_key = secret_key or os.getenv("AUTH_SECRET_KEY", secrets.token_urlsafe(32))
+        self.algorithm = algorithm
+        self.token_expiry_minutes = token_expiry_minutes
+        self.database = database
         
-        # Mock user store (in production, use database)
-        self._users: Dict[str, User] = {}
-    
-    def create_user(self, user_id: str, email: str, tier: str = "free") -> User:
-        """Create a new user"""
-        user = User(
-            id=user_id,
-            email=email,
-            tier=tier
-        )
-        self._users[user_id] = user
-        return user
-    
-    def get_user(self, user_id: str) -> Optional[User]:
-        """Get user by ID"""
-        return self._users.get(user_id)
-    
-    def authenticate_request(self, headers: Dict[str, str]) -> Optional[User]:
-        """Authenticate a request using headers"""
-        # Try API key first
-        api_key = headers.get(self.config.api_key_header)
-        if api_key:
-            key = self.api_key_manager.verify_key(api_key)
-            if key:
-                return self.get_user(key.user_id)
+        # Rate limiting
+        self._failed_attempts: Dict[str, List[datetime]] = {}
+        self._rate_limit_window = 300  # 5 minutes
+        self._max_failed_attempts = 5
         
-        # Try Bearer token
-        auth_header = headers.get(self.config.bearer_header, "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            user = self.token_manager.get_user_from_token(token)
-            if user:
-                return user
-        
-        return None
+        logger.info(f"AuthManager initialized with algorithm {algorithm}")
     
-    def create_api_key(self, user_id: str, name: str, expires_days: int = None) -> APIKey:
-        """Create an API key for a user"""
-        return self.api_key_manager.generate_key(user_id, name, expires_days)
+    def hash_password(self, password: str) -> str:
+        """Hash a password"""
+        return pwd_context.hash(password)
     
-    def login(self, email: str, password: str) -> Optional[Tuple[str, User]]:
-        """
-        Login with email and password.
-        Returns (token, user) on success, None on failure.
+    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
+        """Verify a password against a hash"""
+        try:
+            return pwd_context.verify(plain_password, hashed_password)
+        except Exception:
+            return False
+    
+    def create_access_token(self, user_id: str, email: str, tier: str = "free") -> str:
+        """Create JWT access token"""
+        expire = datetime.utcnow() + timedelta(minutes=self.token_expiry_minutes)
+        to_encode = {
+            "sub": user_id,
+            "email": email,
+            "tier": tier,
+            "exp": expire,
+            "iat": datetime.utcnow(),
+            "jti": secrets.token_hex(16)  # Unique token ID
+        }
         
-        In production, this would verify against a database with hashed passwords.
-        """
-        # Find user by email
-        user = None
-        for u in self._users.values():
-            if u.email == email:
-                user = u
-                break
+        try:
+            encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
+            logger.info(f"Created access token for user {user_id}")
+            return encoded_jwt
+        except Exception as e:
+            logger.error(f"Failed to create access token: {e}")
+            raise
+    
+    def verify_token(self, token: str) -> TokenData:
+        """Verify and decode JWT token"""
+        try:
+            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            
+            # Validate required fields
+            required_fields = ["sub", "email", "exp", "iat"]
+            for field in required_fields:
+                if field not in payload:
+                    raise HTTPException(401, "Invalid token: missing required fields")
+            
+            return TokenData(
+                user_id=payload["sub"],
+                email=payload["email"],
+                tier=payload.get("tier", "free"),
+                exp=datetime.fromtimestamp(payload["exp"]),
+                iat=datetime.fromtimestamp(payload["iat"])
+            )
+            
+        except jwt.ExpiredSignatureError:
+            logger.warning("Token expired")
+            raise HTTPException(401, "Token expired", headers={"WWW-Authenticate": "Bearer"})
+        except jwt.InvalidTokenError as e:
+            logger.warning(f"Invalid token: {e}")
+            raise HTTPException(401, "Invalid token", headers={"WWW-Authenticate": "Bearer"})
+        except Exception as e:
+            logger.error(f"Token verification error: {e}")
+            raise HTTPException(401, "Token verification failed", headers={"WWW-Authenticate": "Bearer"})
+    
+    def _check_rate_limit(self, identifier: str) -> bool:
+        """Check if identifier is rate limited"""
+        now = datetime.utcnow()
         
-        if not user:
-            logger.warning(f"Login attempt for unknown email: {email}")
+        # Clean old entries
+        if identifier in self._failed_attempts:
+            self._failed_attempts[identifier] = [
+                attempt for attempt in self._failed_attempts[identifier]
+                if (now - attempt).total_seconds() < self._rate_limit_window
+            ]
+        
+        # Check limit
+        if len(self._failed_attempts.get(identifier, [])) >= self._max_failed_attempts:
+            return False  # Rate limited
+        
+        return True
+    
+    def _record_failed_attempt(self, identifier: str):
+        """Record a failed authentication attempt"""
+        now = datetime.utcnow()
+        
+        if identifier not in self._failed_attempts:
+            self._failed_attempts[identifier] = []
+        
+        self._failed_attempts[identifier].append(now)
+    
+    async def authenticate_user(self, email: str, password: str) -> Optional[User]:
+        """Authenticate a user with email and password"""
+        # Check rate limit
+        if not self._check_rate_limit(email):
+            logger.warning(f"Rate limit exceeded for {email}")
+            raise HTTPException(429, "Too many failed attempts. Please try again later.")
+        
+        try:
+            if not self.database:
+                logger.error("Database not configured for authentication")
+                return None
+            
+            # Get user from database
+            user = await self.database.get_user_by_email(email)
+            
+            if not user:
+                self._record_failed_attempt(email)
+                return None
+            
+            # Verify password
+            if not hasattr(user, 'password_hash'):
+                logger.error(f"User {email} has no password hash")
+                return None
+            
+            if not self.verify_password(password, user.password_hash):
+                self._record_failed_attempt(email)
+                return None
+            
+            # Clear failed attempts on success
+            if email in self._failed_attempts:
+                del self._failed_attempts[email]
+            
+            return User(
+                id=user.id,
+                email=user.email,
+                tier=user.tier,
+                session_quota=user.session_quota if hasattr(user, 'session_quota') else 5,
+                max_session_ttl=user.max_session_ttl if hasattr(user, 'max_session_ttl') else 60
+            )
+            
+        except Exception as e:
+            logger.error(f"Authentication error: {e}")
             return None
-        
-        # In production, verify password hash
-        # For demo, accept any password
-        # if not verify_password(password, user.password_hash):
-        #     return None
-        
-        token = self.token_manager.create_token(user)
-        return token, user
     
-    def check_session_quota(self, user: User) -> Tuple[bool, str]:
-        """Check if user can create a new session"""
-        return self.quota_manager.check_quota(user)
+    async def get_current_user(
+        self, 
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    ) -> User:
+        """Get current user from JWT token"""
+        if credentials is None:
+            raise HTTPException(
+                401, 
+                "Not authenticated", 
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        token = credentials.credentials
+        token_data = self.verify_token(token)
+        
+        # Get user from database
+        if self.database:
+            user = await self.database.get_user(token_data.user_id)
+            if not user:
+                raise HTTPException(401, "User not found")
+            
+            return User(
+                id=user.id,
+                email=user.email,
+                tier=user.tier,
+                session_quota=getattr(user, 'session_quota', 5),
+                max_session_ttl=getattr(user, 'max_session_ttl', 60)
+            )
+        else:
+            # Return user from token if no database (development mode)
+            logger.warning("Using token-based user without database validation")
+            return User(
+                id=token_data.user_id,
+                email=token_data.email,
+                tier=token_data.tier
+            )
     
-    def record_session_created(self, user_id: str):
-        """Record that a session was created"""
-        self.quota_manager.increment_quota(user_id)
+    async def get_current_user_from_request(self, request: Request) -> User:
+        """Extract and validate user from request"""
+        auth_header = request.headers.get("Authorization")
+        
+        if not auth_header or not auth_header.startswith("Bearer "):
+            raise HTTPException(401, "Missing or invalid authorization header")
+        
+        token = auth_header.split(" ")[1]
+        token_data = self.verify_token(token)
+        
+        # Get user from database
+        if self.database:
+            user = await self.database.get_user(token_data.user_id)
+            if not user:
+                raise HTTPException(401, "User not found")
+            
+            return User(
+                id=user.id,
+                email=user.email,
+                tier=user.tier,
+                session_quota=getattr(user, 'session_quota', 5),
+                max_session_ttl=getattr(user, 'max_session_ttl', 60)
+            )
+        else:
+            return User(
+                id=token_data.user_id,
+                email=token_data.email,
+                tier=token_data.tier
+            )
+
+
+def require_auth(func):
+    """Decorator to require authentication for an endpoint"""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        # Get request from kwargs or args
+        request = kwargs.get('request')
+        if not request:
+            # Try to find request in args (usually second argument after self)
+            for arg in args:
+                if isinstance(arg, Request):
+                    request = arg
+                    break
+        
+        if not request:
+            raise HTTPException(500, "Request not available for authentication")
+        
+        # Get auth manager from app state
+        auth_manager = getattr(request.app.state, 'auth_manager', None)
+        if not auth_manager:
+            raise HTTPException(500, "Authentication not configured")
+        
+        # Get current user
+        try:
+            current_user = await auth_manager.get_current_user_from_request(request)
+        except HTTPException:
+            raise
+        
+        # Add user to kwargs
+        kwargs['current_user'] = current_user
+        
+        return await func(*args, **kwargs)
+    
+    return wrapper
+
+
+def require_tier(required_tiers: List[UserTier]):
+    """Decorator to require specific user tiers"""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            current_user = kwargs.get('current_user')
+            if not current_user:
+                raise HTTPException(401, "Authentication required")
+            
+            if current_user.tier not in required_tiers:
+                raise HTTPException(
+                    403, 
+                    f"Access denied. Required tier: {', '.join(required_tiers)}"
+                )
+            
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def require_quota_check(func):
+    """Decorator to check user session quota before creating sessions"""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        current_user = kwargs.get('current_user')
+        if not current_user:
+            raise HTTPException(401, "Authentication required")
+        
+        # Get session manager from request
+        request = kwargs.get('request')
+        if not request:
+            for arg in args:
+                if isinstance(arg, Request):
+                    request = arg
+                    break
+        
+        if request:
+            session_manager = getattr(request.app.state, 'session_manager', None)
+            if session_manager:
+                # Count active sessions for user
+                user_sessions = [
+                    s for s in session_manager.sessions.values()
+                    if s.metadata.get('user_id') == current_user.id
+                    and s.status.value in ['running', 'creating']
+                ]
+                
+                if len(user_sessions) >= current_user.session_quota:
+                    raise HTTPException(
+                        429, 
+                        f"Session quota exceeded. Maximum: {current_user.session_quota}"
+                    )
+        
+        return await func(*args, **kwargs)
+    return wrapper
+
+
+# Request/Response models
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: User
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    tier: UserTier = UserTier.FREE
+
+
+class TokenRefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class TokenRefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int

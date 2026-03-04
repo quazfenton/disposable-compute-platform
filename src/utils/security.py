@@ -378,52 +378,26 @@ class SecurityManager:
 async def integrate_security_manager(session_manager):
     """Integrate security manager with the session manager"""
     # Use the enhanced security manager
-    from .security_enhanced import SecurityManager as EnhancedSecurityManager
+    from src.utils.security_enhanced import SecurityManager as EnhancedSecurityManager
     security_manager = EnhancedSecurityManager()
 
     # Store security manager in session manager
     session_manager.security_manager = security_manager
 
-    # Override session creation to include security setup
+    # Wrap the create_session method to include audit logging
     original_create_session = session_manager.create_session
 
-    async def new_create_session(session_type, repo_url, repo_ref=None, pr_number=None, ttl_minutes=None):
-        session = await original_create_session(
-            session_type, repo_url, repo_ref, pr_number, ttl_minutes
+    async def new_create_session(*args, **kwargs):
+        session = await original_create_session(*args, **kwargs)
+        
+        # Log the pod creation for audit purposes
+        security_manager.log_pod_creation(
+            user_id="system",
+            pod_id=session.id,
+            pod_spec={"type": session.type.value, "repo_url": session.repo_url}
         )
-
-        # Apply security measures after session creation
-        if hasattr(session_manager, 'network_manager') and session.network_id:
-            # Log the pod creation for audit purposes
-            security_manager.log_pod_creation("system", session.id, {
-                "type": session_type.value,
-                "repo_url": repo_url,
-                "repo_ref": repo_ref
-            })
-
+        
         return session
 
     session_manager.create_session = new_create_session
-
-    # Override session destruction to include security cleanup
-    original_destroy_session = session_manager.destroy_session
-
-    async def new_destroy_session(session_id):
-        # Clean up security resources first
-        # In the enhanced manager, we don't have a direct cleanup method
-        # but we can log the destruction
-        security_manager.audit_logger.log_event(
-            event_type="POD_DESTRUCTION",
-            user_id="system",
-            resource=session_id,
-            action="DESTROY",
-            result="SUCCESS",
-            details={}
-        )
-
-        # Then destroy the session normally
-        await original_destroy_session(session_id)
-
-    session_manager.destroy_session = new_destroy_session
-
     return security_manager

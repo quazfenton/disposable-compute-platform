@@ -1,5 +1,6 @@
-# Production Dockerfile for Disposable Compute Platform
+# Production Dockerfile for Vanish Compute (VNC)
 FROM python:3.11-slim as builder
+
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

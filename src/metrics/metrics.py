@@ -4,11 +4,12 @@ Integrates with Prometheus for monitoring
 """
 import time
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
 from dataclasses import dataclass, field
 from contextlib import contextmanager
 import threading
+from src.metrics.alerting import get_alert_manager
 
 # Try to import prometheus client
 try:
@@ -50,7 +51,7 @@ class MetricsRegistry:
         else:
             self._prometheus_registry = None
     
-    def counter(self, name: str, description: str, labels: List[str] = None) -> Counter:
+    def counter(self, name: str, description: str, labels: List[str] = None) -> Any:
         """Get or create a counter metric"""
         full_name = f"{self.namespace}_{name}"
         
@@ -69,7 +70,7 @@ class MetricsRegistry:
             
             return self._metrics.get(full_name)
     
-    def gauge(self, name: str, description: str, labels: List[str] = None) -> Gauge:
+    def gauge(self, name: str, description: str, labels: List[str] = None) -> Any:
         """Get or create a gauge metric"""
         full_name = f"{self.namespace}_{name}"
         
@@ -89,7 +90,7 @@ class MetricsRegistry:
             return self._metrics.get(full_name)
     
     def histogram(self, name: str, description: str, labels: List[str] = None, 
-                  buckets: List[float] = None) -> Histogram:
+                  buckets: List[float] = None) -> Any:
         """Get or create a histogram metric"""
         full_name = f"{self.namespace}_{name}"
         
@@ -187,7 +188,7 @@ class MetricsRegistry:
 class PlatformMetrics:
     """Platform-wide metrics"""
     
-    def __init__(self, registry: MetricsRegistry = None):
+    def __init__(self, registry: Optional[MetricsRegistry] = None):
         self.registry = registry or MetricsRegistry()
         self._setup_metrics()
     
@@ -374,7 +375,7 @@ class PlatformMetrics:
             self.registry.increment("api_requests_total", 
                                    labels={"method": method, "endpoint": endpoint, "status": status})
             self.registry.observe("api_request_duration_seconds", duration,
-                                 labels={"method": method, "endpoint": endpoint})
+                                  labels={"method": method, "endpoint": endpoint})
     
     # Streaming methods
     def set_active_streaming_sessions(self, count: int):
@@ -388,17 +389,18 @@ class PlatformMetrics:
 
 
 class HealthChecker:
-    """Health check aggregator"""
+    """Health check aggregator with alerting support"""
     
     def __init__(self):
-        self._checks: Dict[str, callable] = {}
+        self._checks: Dict[str, Callable] = {}
+        self.alert_manager = get_alert_manager()
     
-    def register(self, name: str, check_func: callable):
+    def register(self, name: str, check_func: Callable):
         """Register a health check"""
         self._checks[name] = check_func
     
     async def run_checks(self) -> Dict[str, Any]:
-        """Run all health checks"""
+        """Run all health checks and trigger alerts if unhealthy"""
         results = {
             "status": "healthy",
             "timestamp": datetime.utcnow().isoformat(),
@@ -407,7 +409,7 @@ class HealthChecker:
         
         for name, check_func in self._checks.items():
             try:
-                if hasattr(check_func, '__call__'):
+                if callable(check_func):
                     import asyncio
                     if asyncio.iscoroutinefunction(check_func):
                         check_result = await check_func()
@@ -420,12 +422,26 @@ class HealthChecker:
                 
                 if check_result.get("status") != "healthy":
                     results["status"] = "degraded"
+                    # Trigger alert for degraded status
+                    await self.alert_manager.trigger_alert(
+                        severity="warning",
+                        title=f"Health check degraded: {name}",
+                        description=f"Check returned status {check_result.get('status')}",
+                        metadata={"check_name": name, "result": check_result}
+                    )
             except Exception as e:
                 results["checks"][name] = {
                     "status": "unhealthy",
                     "error": str(e)
                 }
                 results["status"] = "unhealthy"
+                # Trigger critical alert for exception
+                await self.alert_manager.trigger_alert(
+                    severity="critical",
+                    title=f"Health check failed: {name}",
+                    description=str(e),
+                    metadata={"check_name": name, "error": str(e)}
+                )
         
         return results
 

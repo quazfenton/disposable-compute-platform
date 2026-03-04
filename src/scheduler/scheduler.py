@@ -5,6 +5,7 @@ constraint validation, and priority-based placement.
 """
 import asyncio
 import logging
+import heapq
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
@@ -14,8 +15,9 @@ import time
 import threading
 from contextlib import contextmanager
 
-from src.models.pod import Pod, PodSpec, PodStatus, ResourceRequirements
-from src.models.gpu import GPUDevice, GPUStatus
+from src.models.pod import Pod, PodSpec, PodStatus, ResourceRequirements, GPUResource, ComputeNode
+from src.models.gpu import GPUDevice, GPUStatus, GPUFamily
+
 
 
 class SchedulingStatus(Enum):
@@ -81,7 +83,7 @@ class Node:
     def resource_lock(self):
         return self._lock
     
-    def update_metrics(self, cpu_load: float, memory_load: float, gpu_load: float = None, temperature: float = None):
+    def update_metrics(self, cpu_load: float, memory_load: float, gpu_load: Optional[float] = None, temperature: Optional[float] = None):
         """Update node metrics"""
         with self._lock:
             self.cpu_load_avg = cpu_load
@@ -91,6 +93,7 @@ class Node:
             if temperature is not None:
                 self.temperature_celsius = temperature
             self.last_heartbeat = datetime.now()
+
 
 
 @dataclass
@@ -191,17 +194,19 @@ class ConstraintValidator:
 class NodeScorer:
     """Scores nodes for scheduling decisions"""
     
-    def __init__(self, weights: ScoringWeights = None):
+    def __init__(self, weights: Optional[ScoringWeights] = None):
         self.weights = weights or ScoringWeights()
         self.logger = logging.getLogger(__name__)
     
-    def score(self, node: Node, request: PodRequest, user_location: Tuple[float, float] = None) -> float:
+    def score(self, node: Node, request: PodRequest, user_location: Optional[Tuple[float, float]] = None) -> float:
         """Score a node for a pod request (higher is better)"""
         
         resource_score = self._calculate_resource_score(node, request)
         load_score = self._calculate_load_score(node, request)
         proximity_score = self._calculate_proximity_score(node, user_location)
         reliability_score = self._calculate_reliability_score(node)
+
+
         
         # Weighted combination
         total_score = (
@@ -270,10 +275,11 @@ class NodeScorer:
         avg_load = sum(load_factors) / len(load_factors)
         return max(0.0, 1.0 - avg_load)
     
-    def _calculate_proximity_score(self, node: Node, user_location: Tuple[float, float]) -> float:
+    def _calculate_proximity_score(self, node: Node, user_location: Optional[Tuple[float, float]]) -> float:
         """Calculate score based on geographic proximity to user"""
         if user_location is None:
             return 0.7  # Neutral score if location unknown
+
         
         distance = self._haversine_distance(
             node.latitude, node.longitude,
@@ -554,26 +560,27 @@ class PriorityQueue:
         self.queue = []
         self.counter = 0  # To handle ties in priority
     
-    def push(self, request: SchedulingRequest):
+    def push(self, request: PodRequest):
         """Add a request to the queue"""
         # Use negative priority because heapq is a min-heap
         # Also use counter to handle ties
         heapq.heappush(self.queue, (-request.priority, self.counter, request))
         self.counter += 1
     
-    def pop(self) -> Optional[SchedulingRequest]:
+    def pop(self) -> Optional[PodRequest]:
         """Remove and return the highest priority request"""
         if self.queue:
             _, _, request = heapq.heappop(self.queue)
             return request
         return None
     
-    def peek(self) -> Optional[SchedulingRequest]:
+    def peek(self) -> Optional[PodRequest]:
         """Return the highest priority request without removing it"""
         if self.queue:
             _, _, request = self.queue[0]
             return request
         return None
+
     
     def is_empty(self) -> bool:
         """Check if the queue is empty"""
@@ -582,10 +589,11 @@ class PriorityQueue:
 class Scheduler:
     """Main scheduler for disposable compute platform"""
     
-    def __init__(self):
+    def __init__(self, orchestrator: Any = None):
         self.nodes: Dict[str, Node] = {}
         self.pending_requests: Dict[str, PodRequest] = {}
         self.scheduled_pods: Dict[str, str] = {}  # pod_id -> node_id
+        self.orchestrator = orchestrator
         
         self.validator = ConstraintValidator()
         self.scorer = NodeScorer()
@@ -595,12 +603,14 @@ class Scheduler:
         self.logger = logging.getLogger(__name__)
         
         # Metrics
-        self.metrics = {
+        self.metrics: Dict[str, Any] = {
             "total_scheduled": 0,
             "total_failed": 0,
             "total_preemptions": 0,
-            "avg_scheduling_time_ms": 0,
+            "avg_scheduling_time_ms": 0.0,
         }
+
+
     
     def register_node(self, node: Node):
         """Register a compute node with the scheduler"""
@@ -613,7 +623,7 @@ class Scheduler:
             del self.nodes[node_id]
             self.logger.info(f"Unregistered node {node_id}")
     
-    async def schedule(self, request: PodRequest, user_location: Tuple[float, float] = None) -> Tuple[bool, str, Optional[str]]:
+    async def schedule(self, request: PodRequest, user_location: Optional[Tuple[float, float]] = None) -> Tuple[bool, str, Optional[str]]:
         """
         Schedule a pod request to a node.
         Returns (success, message, node_id)
@@ -653,6 +663,7 @@ class Scheduler:
         for node in valid_nodes:
             score = self.scorer.score(node, request, user_location)
             scored_nodes.append((node, score))
+
         
         # Sort by score (descending)
         scored_nodes.sort(key=lambda x: x[1], reverse=True)
@@ -686,8 +697,11 @@ class Scheduler:
         return False, "Failed to reserve resources", None
     
     async def _try_preemption(self, request: PodRequest, nodes: List[Node], 
-                             user_location: Tuple[float, float]) -> Tuple[bool, str, Optional[str]]:
+                             user_location: Optional[Tuple[float, float]] = None) -> Tuple[bool, str, Optional[str]]:
         """Try to preempt lower priority pods to make room"""
+        if self.orchestrator is None:
+            return False, "Orchestrator not available for preemption", None
+
         for node in nodes:
             if node.status != NodeStatus.ACTIVE:
                 continue
@@ -695,16 +709,27 @@ class Scheduler:
             candidates = self.preemption_manager.find_preemption_candidates(node, request)
             
             if candidates:
-                self.logger.info(f"Considering preemption of {len(candidates)} pods on {node.id}")
+                self.logger.info(f"Preempting {len(candidates)} pods on {node.id} for {request.id}")
                 
-                # In production, this would trigger actual preemption
-                # For now, we just log and return that preemption is possible
-                # The actual preemption would be handled by a separate process
+                for pod_id in candidates:
+                    try:
+                        await self.orchestrator.destroy_pod(pod_id)
+                        self.unschedule(pod_id)
+                    except Exception as e:
+                        self.logger.error(f"Failed to preempt pod {pod_id}: {e}")
                 
-                self.metrics["total_preemptions"] += 1
-                return False, f"Preemption required: {len(candidates)} pods would be preempted", None
+                # Re-attempt reservation after clearing space
+                if self.resource_manager.reserve(node, request):
+                    request.status = SchedulingStatus.SCHEDULED
+                    request.assigned_node_id = node.id
+                    request.scheduled_at = datetime.now()
+                    self.scheduled_pods[request.id] = node.id
+                    self.metrics["total_scheduled"] += 1
+                    self.metrics["total_preemptions"] += 1
+                    return True, "Preempted and scheduled", node.id
         
         return False, "No nodes available even with preemption", None
+
     
     def unschedule(self, pod_id: str) -> bool:
         """Remove a pod from scheduling (release resources)"""

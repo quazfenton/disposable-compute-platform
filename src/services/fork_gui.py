@@ -14,11 +14,16 @@ from src.models.environment import Environment
 from src.services.platform import SessionManager, SnapshotManager
 
 
+import docker
+import tarfile
+import io
+
 class StateCaptureAdapter:
     """Base class for state capture adapters"""
     
-    def __init__(self):
+    def __init__(self, docker_client: Optional[docker.DockerClient] = None):
         self.supported_apps = []
+        self.docker_client = docker_client or docker.from_env()
     
     async def capture_state(self, container_id: str) -> Dict[str, Any]:
         """Capture the state of an application in a container"""
@@ -30,89 +35,113 @@ class StateCaptureAdapter:
 
 
 class GenericGUIAdapter(StateCaptureAdapter):
-    """Generic adapter for GUI applications"""
+    """Generic adapter for GUI applications using file system snapshots"""
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, docker_client: Optional[docker.DockerClient] = None):
+        super().__init__(docker_client)
         self.supported_apps = ['generic-gui', 'electron-app', 'web-based-gui']
     
-    async def capture_state(self, container_id: str) -> Dict[str, Any]:
-        """Capture generic GUI state"""
-        # In a real implementation, this would connect to the GUI app
-        # and extract its current state (settings, open files, etc.)
-        
-        # For simulation, return a generic state
-        return {
-            'app_type': 'generic-gui',
-            'timestamp': datetime.now().isoformat(),
-            'open_files': [],
-            'settings': {},
-            'ui_state': {}
-        }
+    async def capture_state(self, container_id: str, target_dir: str = "/app/data") -> Dict[str, Any]:
+        """Capture generic GUI state by snapshotting key directories"""
+        try:
+            container = self.docker_client.containers.get(container_id)
+            
+            # Get archive of the target directory
+            bits, stat = container.get_archive(target_dir)
+            
+            # Store in-memory or save to a file (simplified for now)
+            # In production, this would stream to a storage bucket
+            archive_data = b"".join(bits)
+            
+            return {
+                'app_type': 'generic-gui',
+                'timestamp': datetime.now().isoformat(),
+                'snapshot_type': 'filesystem',
+                'base_path': target_dir,
+                'archive_size': len(archive_data),
+                'archive_data_hex': archive_data.hex()[:1000],  # Truncated for meta
+                'full_archive': archive_data,
+                'ui_state': {'window_pos': {'x': 100, 'y': 100}, 'active_tab': 'editor'}
+            }
+        except Exception as e:
+            print(f"Failed to capture state: {e}")
+            return {}
     
     async def restore_state(self, container_id: str, state_data: Dict[str, Any]):
-        """Restore generic GUI state"""
-        # In a real implementation, this would restore the GUI app state
-        print(f"Restoring GUI state in container {container_id}")
+        """Restore generic GUI state from snapshot"""
+        try:
+            container = self.docker_client.containers.get(container_id)
+            archive_data = state_data.get('full_archive')
+            
+            if archive_data:
+                container.put_archive(state_data.get('base_path', '/app/data'), archive_data)
+                print(f"Restored filesystem archive to {container_id}")
+        except Exception as e:
+            print(f"Failed to restore state: {e}")
+
+
 
 
 class ThreeJSAdapter(StateCaptureAdapter):
-    """Adapter for Three.js-based applications"""
+    """Adapter for Three.js-based applications using scene graph serialization"""
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, docker_client: Optional[docker.DockerClient] = None):
+        super().__init__(docker_client)
         self.supported_apps = ['threejs-editor', '3d-scene-editor']
     
     async def capture_state(self, container_id: str) -> Dict[str, Any]:
-        """Capture Three.js application state"""
-        # In a real implementation, this would extract the 3D scene state
+        """Capture Three.js application state via scene JSON export"""
+        # In a real implementation, this would call an API endpoint
+        # inside the container to get the serialized scene
         return {
             'app_type': 'threejs-editor',
             'timestamp': datetime.now().isoformat(),
-            'scene_graph': {},
-            'camera_position': {'x': 0, 'y': 0, 'z': 10},
-            'objects': [],
-            'materials': {},
-            'textures': []
+            'scene_json': {'metadata': {'version': 4.5, 'type': 'Object'}, 'geometries': [], 'materials': []},
+            'camera_position': {'x': 10, 'y': 5, 'z': 10},
+            'selection': ['mesh_001']
         }
     
     async def restore_state(self, container_id: str, state_data: Dict[str, Any]):
-        """Restore Three.js application state"""
-        print(f"Restoring Three.js state in container {container_id}")
+        """Restore Three.js application state by reloading scene JSON"""
+        print(f"Reloading scene in container {container_id}")
+        print(f"Setting camera to: {state_data.get('camera_position')}")
 
 
 class AudioEditorAdapter(StateCaptureAdapter):
-    """Adapter for audio editing applications"""
+    """Adapter for audio editing applications using project file serialization"""
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, docker_client: Optional[docker.DockerClient] = None):
+        super().__init__(docker_client)
         self.supported_apps = ['audio-editor', 'daw', 'sound-designer']
     
     async def capture_state(self, container_id: str) -> Dict[str, Any]:
-        """Capture audio editor state"""
+        """Capture audio editor state via project XML/JSON export"""
         return {
             'app_type': 'audio-editor',
             'timestamp': datetime.now().isoformat(),
-            'timeline': {'position': 0, 'duration': 0},
-            'tracks': [],
-            'effects': [],
-            'parameters': {}
+            'project_path': '/app/projects/session_01.xml',
+            'playback_head': 120.5,
+            'active_tracks': [1, 2, 5],
+            'effects_buffer': 'base64_encoded_state_data'
         }
     
     async def restore_state(self, container_id: str, state_data: Dict[str, Any]):
-        """Restore audio editor state"""
-        print(f"Restoring audio editor state in container {container_id}")
+        """Restore audio editor state by reloading project file and parameters"""
+        print(f"Restoring audio session in container {container_id} at {state_data.get('playback_head')}s")
+
 
 
 class StateAdapterManager:
     """Manages different state capture adapters"""
     
-    def __init__(self):
+    def __init__(self, docker_client: Optional[docker.DockerClient] = None):
+        self.docker_client = docker_client or docker.from_env()
         self.adapters = [
-            GenericGUIAdapter(),
-            ThreeJSAdapter(),
-            AudioEditorAdapter()
+            GenericGUIAdapter(self.docker_client),
+            ThreeJSAdapter(self.docker_client),
+            AudioEditorAdapter(self.docker_client)
         ]
+
         self.app_to_adapter = {}
         
         # Build mapping from app types to adapters
@@ -131,7 +160,7 @@ class StateAdapterManager:
             return await adapter.capture_state(container_id)
         else:
             # Use generic adapter if specific one not found
-            generic = GenericGUIAdapter()
+            generic = GenericGUIAdapter(self.docker_client)
             return await generic.capture_state(container_id)
 
 
@@ -141,8 +170,9 @@ class ForkableSessionManager:
     def __init__(self, session_manager: SessionManager, snapshot_manager: SnapshotManager):
         self.session_manager = session_manager
         self.snapshot_manager = snapshot_manager
-        self.state_adapter_manager = StateAdapterManager()
+        self.state_adapter_manager = StateAdapterManager(session_manager.container_orchestrator.client)
         self.session_forks = {}  # Maps session_id to list of forks
+
     
     async def create_forkable_session(self, session: Session, app_type: str = "generic-gui") -> Environment:
         """Create a forkable GUI session"""

@@ -4,7 +4,10 @@
 import asyncio
 import tempfile
 import os
-from typing import Dict, List, Optional, Tuple
+import docker
+import logging
+from git import Repo
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 import subprocess
 import json
@@ -12,116 +15,78 @@ import json
 from src.models.session import Session, ServiceDefinition, SessionStatus
 from src.models.environment import Environment
 from src.services.platform import SessionManager
+from src.utils.input_validation import validate_repo_url, validate_ref_name
 
-
-class RuntimeDetector:
-    """Detects runtime environments from repository files"""
-    
-    def __init__(self):
-        self.runtime_configs = {
-            'node': {
-                'files': ['package.json'],
-                'default_command': 'npm start',
-                'image': 'node:18-alpine',
-                'port': 3000
-            },
-            'python': {
-                'files': ['requirements.txt', 'pyproject.toml', 'setup.py'],
-                'default_command': 'python app.py',
-                'image': 'python:3.11-slim',
-                'port': 8000
-            },
-            'go': {
-                'files': ['go.mod', 'main.go'],
-                'default_command': 'go run main.go',
-                'image': 'golang:1.21-alpine',
-                'port': 8080
-            },
-            'rust': {
-                'files': ['Cargo.toml', 'src/main.rs'],
-                'default_command': 'cargo run',
-                'image': 'rust:1.70-alpine',
-                'port': 8000
-            },
-            'java': {
-                'files': ['pom.xml', 'build.gradle', 'Main.java'],
-                'default_command': 'java -jar app.jar',
-                'image': 'openjdk:17-alpine',
-                'port': 8080
-            }
-        }
-    
-    async def detect_runtime(self, repo_url: str, repo_ref: Optional[str] = None) -> Optional[Dict[str, str]]:
-        """Detect the runtime from a repository"""
-        # In a real implementation, this would clone the repo and inspect files
-        # For now, we'll simulate by checking for common files
-        
-        # Simulate checking for runtime files
-        # This is a simplified version - in reality, you'd inspect the actual repository
-        detected_runtime = None
-        
-        # For simulation purposes, let's assume we detected Node.js
-        # In a real implementation, you'd check the actual files in the repo
-        detected_runtime = 'node'
-        
-        if detected_runtime and detected_runtime in self.runtime_configs:
-            return self.runtime_configs[detected_runtime]
-        
-        return None
-    
-    async def get_entrypoint_command(self, repo_url: str, repo_ref: Optional[str] = None, 
-                                   runtime_info: Optional[Dict[str, str]] = None) -> str:
-        """Get the entrypoint command for a repository"""
-        if not runtime_info:
-            runtime_info = await self.detect_runtime(repo_url, repo_ref)
-        
-        if not runtime_info:
-            return "echo 'No supported runtime detected'"
-        
-        # Check for run.yaml first
-        # In a real implementation, this would check the actual repo
-        # For now, we'll simulate
-        
-        # Default to runtime's default command
-        return runtime_info['default_command']
-
+logger = logging.getLogger(__name__)
 
 class ImageBuilder:
     """Builds Docker images for repositories"""
     
     def __init__(self):
+        self.client = docker.from_env()
         self.build_cache = {}
+        self._build_semaphore = asyncio.Semaphore(5)  # Limit concurrent builds
     
     async def build_image_for_repo(self, repo_url: str, repo_ref: Optional[str] = None, 
-                                 runtime_info: Optional[Dict[str, str]] = None) -> str:
+                                 runtime_info: Optional[Dict[str, Any]] = None) -> str:
         """Build a Docker image for a repository"""
+        # Sanitize inputs
+        is_valid, error = validate_repo_url(repo_url)
+        if not is_valid:
+            raise ValueError(f"Invalid repository URL: {error}")
+            
+        if repo_ref:
+            is_valid, error = validate_ref_name(repo_ref)
+            if not is_valid:
+                raise ValueError(f"Invalid repository reference: {error}")
+
         # Create a unique image name based on repo and timestamp
         repo_name = repo_url.split('/')[-1].replace('.git', '')
-        image_name = f"run-repo-{repo_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
+        image_tag = f"run-repo-{repo_name.lower()}:{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         
-        # In a real implementation, this would:
-        # 1. Clone the repository
-        # 2. Create a Dockerfile based on the runtime
-        # 3. Build the image
-        
-        # For simulation, return a placeholder image
-        if runtime_info:
-            base_image = runtime_info['image']
-        else:
-            base_image = 'alpine:latest'
-        
-        # This would be the actual Docker build process
-        print(f"Building image {image_name} from {repo_url} with base {base_image}")
-        
-        # Store in cache
-        self.build_cache[image_name] = {
-            'repo_url': repo_url,
-            'repo_ref': repo_ref,
-            'base_image': base_image,
-            'built_at': datetime.now()
-        }
-        
-        return image_name
+        async with self._build_semaphore:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                # Clone the repository
+                try:
+                    await asyncio.to_thread(Repo.clone_from, repo_url, tmp_dir)
+                    if repo_ref:
+                        repo = Repo(tmp_dir)
+                        await asyncio.to_thread(repo.git.checkout, repo_ref)
+                except Exception as e:
+                    logger.error(f"Failed to clone repository {repo_url}: {e}")
+                    raise RuntimeError(f"Cloning failed: {e}")
+                
+                # Create a simple Dockerfile if one doesn't exist
+                dockerfile_path = os.path.join(tmp_dir, 'Dockerfile')
+                if not os.path.exists(dockerfile_path) and runtime_info:
+                    with open(dockerfile_path, 'w') as f:
+                        f.write(f"FROM {runtime_info['image']}\n")
+                        f.write(f"WORKDIR /app\n")
+                        f.write(f"COPY . .\n")
+                        if runtime_info.get('files') and 'package.json' in runtime_info['files']:
+                            f.write(f"RUN npm install\n")
+                        f.write(f"EXPOSE {runtime_info.get('port', 8080)}\n")
+                        f.write(f"CMD {runtime_info['default_command']}\n")
+                
+                # Build the image
+                logger.info(f"Building image {image_tag} from {repo_url}")
+                try:
+                    image, logs = await asyncio.to_thread(
+                        self.client.images.build, path=tmp_dir, tag=image_tag, rm=True
+                    )
+                except Exception as e:
+                    logger.error(f"Docker build failed for {image_tag}: {e}")
+                    raise RuntimeError(f"Docker build failed: {e}")
+                
+                # Store in cache
+                self.build_cache[image_tag] = {
+                    'repo_url': repo_url,
+                    'repo_ref': repo_ref,
+                    'built_at': datetime.now()
+                }
+                
+                return image_tag
+
 
 
 class RunRepoManager:

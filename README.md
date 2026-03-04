@@ -1,10 +1,11 @@
-# Disposable Compute Platform
+# Vanish Compute (VNC)
 
-A comprehensive platform for disposable compute environments supporting three core capabilities:
+A comprehensive platform for ephemeral compute environments supporting three core capabilities:
 
 1. **Preview Environments for Everything** - Ephemeral environments for every PR
 2. **"Run This Repo" Button** - Instant runnable environments 
 3. **Forkable GUI Sessions** - Forkable live GUI application sessions
+
 
 ## Table of Contents
 - [Features](#features)
@@ -30,28 +31,37 @@ A comprehensive platform for disposable compute environments supporting three co
 ### "Run This Repo" Button
 - Single-click runnable environments for any repository
 - Automatic runtime detection (Node.js, Python, Go, Rust, Java)
-- Default entrypoint resolution
+- Real Docker image building via SDK
 - Shareable links with configurable TTL
 
 ### Forkable GUI Sessions
 - Forkable live GUI application sessions
-- State capture and restoration system
-- Adapter architecture for different GUI types
-- Session forking with independent divergence
-- Lineage tracking between forks
+- **Selective Forwarding Unit (SFU)** for multi-client streaming
+- **WebRTC** base with STUN/TURN integration
+- State capture and restoration using bit-level Docker snapshots
+- Adapter architecture for Three.js, Audio, and Generic GUIs
+- Advanced input handling (Gamepad, Multi-touch)
+
+### Advanced Virtualization & Isolation
+- **Firecracker MicroVMs**: High-density, high-isolation pod type
+- **KVM/Libvirt Support**: Full VM virtualization with GPU passthrough
+- **GPU-Aware Scheduling**: Priority-based placement and active preemption
+- **Hardware Acceleration**: Automated GPU discovery and allocation
 
 ### Shared Platform Layer
-- Unified session management
-- Container orchestration
-- Networking and routing
-- Security and isolation
-- Common API layer
+- Unified session management with **Redis Caching**
+- Multi-runtime orchestration (Container, VM, MicroVM)
+- **Event Streaming**: Redis PubSub for real-time lifecycle tracking
+- **Nginx Ingress**: Dynamic subdomain routing with WebSocket support
+- Structured JSON logging with `structlog`
 
-### Enhanced Capabilities
-- Monitoring and observability with Prometheus metrics
-- Advanced security with vulnerability scanning and runtime monitoring
-- Resource optimization with prediction and auto-scaling
-- Advanced networking with service mesh and CDN integration
+### Reliability & Observability
+- **Enterprise Alerting**: Integrated PagerDuty and OpsGenie support
+- **Automated Health Checks**: Self-healing with critical alert triggers
+- **Security Scans**: Image vulnerability scanning using **Trivy**
+- **Runtime Monitoring**: Suspicious process detection inside pods
+- **Database Migrations**: Versioned schema management via **Alembic**
+
 
 ## Architecture
 
@@ -107,9 +117,10 @@ A comprehensive platform for disposable compute environments supporting three co
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/your-org/disposable-compute-platform.git
-cd disposable-compute-platform
+git clone https://github.com/your-org/vanish-compute.git
+cd vanish-compute
 ```
+
 
 2. **Start the platform**
 ```bash
@@ -222,8 +233,9 @@ For complete API documentation, visit: http://localhost:8000/docs
 ### Project Structure
 
 ```
-disposable-compute-platform/
+vanish-compute/
 ├── src/                    # Source code
+
 │   ├── models/            # Data models
 │   ├── services/          # Business logic
 │   ├── containers/        # Container orchestration
@@ -336,19 +348,22 @@ The platform supports horizontal scaling:
 ## Roadmap
 
 ### Completed Features
-- [x] Basic run-repo functionality
-- [x] Preview environments with multiple services
-- [x] Forkable GUI sessions
-- [x] Security and isolation
-- [x] API layer with documentation
+- [x] Basic run-repo functionality with real Docker builds
+- [x] Preview environments with multiple services and dynamic config
+- [x] Forkable GUI sessions with SFU and WebRTC
+- [x] Firecracker MicroVM and KVM virtualization
+- [x] GPU-aware scheduling and preemption
+- [x] Enterprise alerting (PagerDuty/OpsGenie)
+- [x] Nginx Ingress and subdomain routing
+- [x] Security scanning (Trivy) and runtime monitoring
+- [x] Database migrations (Alembic)
 
 ### Planned Features
-- [ ] Advanced security scanning
-- [ ] Custom domain support
-- [ ] Persistent storage options
-- [ ] Advanced networking features
-- [ ] Integration with CI/CD systems
-- [ ] Advanced monitoring and alerting
+- [ ] Multi-region cluster orchestration
+- [ ] Cost-based resource optimization
+- [ ] Integration with GitHub Actions / GitLab CI
+- [ ] Advanced Service Mesh (mTLS/Tracing)
+
 
 ## License
 
@@ -360,6 +375,7 @@ For support, please open an issue in the GitHub repository or contact the mainta
 
 ---
 
-Built with ❤️ for the disposable compute community.
+Built with ❤️ for the vanish compute community.
+
 
 This platform provides a solid foundation for all three disposable compute concepts with a shared platform layer that enables rapid iteration and feature development.

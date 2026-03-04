@@ -1,4 +1,4 @@
-# API Documentation
+# Vanish Compute (VNC) API Documentation
 
 ## Base URL
 `http://localhost:8000` (or your deployment URL)

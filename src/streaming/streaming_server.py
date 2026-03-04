@@ -7,7 +7,8 @@ import websockets
 import json
 from typing import Dict, List, Optional, Any, Callable
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 import subprocess
 import os
 import threading
@@ -22,17 +23,14 @@ class StreamSession:
     client_connection: Optional[str] = None  # WebSocket connection identifier
     stream_type: str = "webrtc"  # webrtc, vnc, rdp, etc.
     status: str = "initializing"
-    created_at: datetime = None
+    created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     bandwidth_kbps: int = 10000  # 10 Mbps default
     resolution: str = "1920x1080"
     fps: int = 30
     codec: str = "h264"
-    
-    def __post_init__(self):
-        if self.created_at is None:
-            self.created_at = datetime.now()
+
 
 
 @dataclass
@@ -179,8 +177,8 @@ class InputHandler:
         except queue.Full:
             self.logger.warning(f"Input queue full for session {session_id}, dropping event")
     
-    def process_input_events(self, session_id: str, pod_display: str = ":0"):
-        """Process input events and forward to the GUI application"""
+    async def process_input_events(self, session_id: str, pod_display: str = ":0"):
+        """Process input events including gamepad and touch"""
         if session_id not in self.input_queues:
             return
         
@@ -190,48 +188,66 @@ class InputHandler:
             try:
                 event = input_queue.get_nowait()
                 
-                # Forward the event to the GUI application
-                # This is a simplified implementation - in reality, you'd use xdotool, wmctrl, etc.
                 if event['type'] == 'mouse_move':
-                    self._simulate_mouse_move(event, pod_display)
+                    await self._simulate_mouse_move(event, pod_display)
                 elif event['type'] == 'mouse_click':
-                    self._simulate_mouse_click(event, pod_display)
+                    await self._simulate_mouse_click(event, pod_display)
                 elif event['type'] == 'keyboard':
-                    self._simulate_keyboard_input(event, pod_display)
+                    await self._simulate_keyboard_input(event, pod_display)
+                elif event['type'] == 'gamepad':
+                    self._simulate_gamepad_input(event, pod_display)
+                elif event['type'] in ['touch_start', 'touch_move', 'touch_end']:
+                    self._simulate_touch_input(event, pod_display)
                 elif event['type'] == 'resize':
                     self._handle_resize(event, pod_display)
                 
             except queue.Empty:
                 break
+
+    def _simulate_gamepad_input(self, event: Dict[str, Any], pod_display: str):
+        """Simulate gamepad input via virtual joystick"""
+        # In a real implementation, this would use uinput or similar
+        button = event.get('button')
+        value = event.get('value')
+        self.logger.debug(f"Gamepad event on {pod_display}: {button}={value}")
+
+    def _simulate_touch_input(self, event: Dict[str, Any], pod_display: str):
+        """Simulate multi-touch input"""
+        # In a real implementation, this would use xdotool or evdev
+        x, y = event.get('x'), event.get('y')
+        touch_id = event.get('id', 0)
+        self.logger.debug(f"Touch {event['type']} on {pod_display}: {x},{y} (id={touch_id})")
+
     
-    def _simulate_mouse_move(self, event: Dict[str, Any], pod_display: str):
+    async def _simulate_mouse_move(self, event: Dict[str, Any], pod_display: str):
         """Simulate mouse movement"""
         # In a real implementation, this would use xdotool or similar
         # Example: xdotool mousemove --display :0 100 200
         x, y = event['x'], event['y']
         cmd = ["xdotool", "mousemove", "--display", pod_display, str(x), str(y)]
         try:
-            subprocess.run(cmd, check=True)
+            await asyncio.to_thread(subprocess.run, cmd, check=True)
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Failed to move mouse: {e}")
     
-    def _simulate_mouse_click(self, event: Dict[str, Any], pod_display: str):
+    async def _simulate_mouse_click(self, event: Dict[str, Any], pod_display: str):
         """Simulate mouse click"""
         button = event.get('button', '1')  # Default to left click
         cmd = ["xdotool", "click", "--display", pod_display, button]
         try:
-            subprocess.run(cmd, check=True)
+            await asyncio.to_thread(subprocess.run, cmd, check=True)
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Failed to click mouse: {e}")
     
-    def _simulate_keyboard_input(self, event: Dict[str, Any], pod_display: str):
+    async def _simulate_keyboard_input(self, event: Dict[str, Any], pod_display: str):
         """Simulate keyboard input"""
         key = event.get('key', '')
         cmd = ["xdotool", "key", "--delay", "0", "--display", pod_display, key]
         try:
-            subprocess.run(cmd, check=True)
+            await asyncio.to_thread(subprocess.run, cmd, check=True)
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Failed to press key: {e}")
+
     
     def _handle_resize(self, event: Dict[str, Any], pod_display: str):
         """Handle window resize event"""

@@ -7,7 +7,9 @@ import hmac
 import secrets
 import jwt
 import logging
+import json
 from typing import Dict, List, Optional, Any, Tuple
+
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 import subprocess
@@ -139,30 +141,57 @@ class VulnerabilityScanner:
     
     async def _scan_with_trivy(self, image_name: str, scan_id: str) -> SecurityScanResult:
         """Perform scan using Trivy"""
-        # This would be the actual implementation using Trivy
-        # For now, we'll simulate the scan
-        await asyncio.sleep(1)  # Simulate scan time
-        
-        # Return simulated results
-        return SecurityScanResult(
-            scan_id=scan_id,
-            target=image_name,
-            scan_type="vulnerability",
-            timestamp=datetime.now(),
-            status="completed",
-            vulnerabilities=[
-                {
-                    "id": "CVE-2023-1234",
-                    "title": "Sample Vulnerability",
-                    "severity": "MEDIUM",
-                    "package": "openssl",
-                    "version": "1.1.1",
-                    "description": "Sample vulnerability for demonstration"
-                }
-            ],
-            severity_summary={"MEDIUM": 1},
-            recommendations=["Update to latest version"]
-        )
+        try:
+            # Construct Trivy command
+            cmd = ["trivy", "image", "--format", "json", "--quiet", image_name]
+            
+            # Run the scan
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                raise Exception(f"Trivy scan failed: {stderr.decode()}")
+            
+            # Parse results
+            scan_data = json.loads(stdout.decode())
+            vulnerabilities = []
+            severity_summary = {}
+            
+            for report in scan_data.get("Results", []):
+                for vuln in report.get("Vulnerabilities", []):
+                    v_id = vuln.get("VulnerabilityID")
+                    severity = vuln.get("Severity", "UNKNOWN")
+                    
+                    vulnerabilities.append({
+                        "id": v_id,
+                        "title": vuln.get("Title"),
+                        "severity": severity,
+                        "package": vuln.get("PkgName"),
+                        "version": vuln.get("InstalledVersion"),
+                        "description": vuln.get("Description")
+                    })
+                    
+                    severity_summary[severity] = severity_summary.get(severity, 0) + 1
+            
+            return SecurityScanResult(
+                scan_id=scan_id,
+                target=image_name,
+                scan_type="vulnerability",
+                timestamp=datetime.now(),
+                status="completed",
+                vulnerabilities=vulnerabilities,
+                severity_summary=severity_summary,
+                recommendations=["Apply patches for high/critical vulnerabilities"] if severity_summary.get("CRITICAL") or severity_summary.get("HIGH") else []
+            )
+        except Exception as e:
+            self.logger.error(f"Trivy scan failed: {e}")
+            raise
+
 
 
 class RuntimeSecurityMonitor:
@@ -200,26 +229,34 @@ class RuntimeSecurityMonitor:
         """Monitor a single container for security issues"""
         while True:
             try:
-                # In a real implementation, this would check for:
-                # - Unexpected process execution
-                # - File system changes
-                # - Network connections
-                # - Privilege escalation attempts
-                # - etc.
+                # Actual runtime check: list running processes
+                # In a real setup, we'd use something like Falco or eBPF
+                # Here we'll use docker exec to check for suspicious processes
+                cmd = ["docker", "exec", container_id, "ps", "aux"]
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, _ = await proc.communicate()
                 
-                # For simulation, we'll just sleep and occasionally "detect" issues
-                await asyncio.sleep(30)  # Check every 30 seconds
+                if proc.returncode == 0:
+                    processes = stdout.decode().lower()
+                    suspicious_patterns = ["nc", "nmap", "cryptominer", "backdoor"]
+                    for pattern in suspicious_patterns:
+                        if pattern in processes:
+                            self.logger.warning(f"Suspicious process '{pattern}' detected in container {container_id}")
+                            # In production, this would trigger an alert or isolation
                 
-                # Simulate occasional security event detection
-                if secrets.randbelow(10) == 0:  # 10% chance of detecting an event
-                    self.logger.warning(f"Security event detected in container {container_id}")
+                await asyncio.sleep(60)  # Check every minute
                 
             except asyncio.CancelledError:
                 self.logger.info(f"Security monitoring cancelled for container {container_id}")
                 break
             except Exception as e:
                 self.logger.error(f"Error monitoring container {container_id}: {e}")
-                await asyncio.sleep(30)  # Wait before retrying
+                await asyncio.sleep(60)  # Wait before retrying
+
 
 
 class NetworkPolicyEnforcer:

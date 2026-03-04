@@ -4,7 +4,7 @@ Database models and connection management for disposable compute platform
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import uuid
 
 # Try to import asyncpg, fall back to mock if not available
@@ -19,9 +19,11 @@ except ImportError:
 class SessionStatus(Enum):
     CREATING = "creating"
     RUNNING = "running"
+    STOPPING = "stopping"
     STOPPED = "stopped"
     FAILED = "failed"
     DESTROYED = "destroyed"
+    ERROR = "error"
 
 
 class SessionType(Enum):
@@ -49,17 +51,17 @@ class Session:
     repo_url: Optional[str] = None
     repo_ref: Optional[str] = None
     pr_number: Optional[int] = None
-    config: Dict[str, Any] = None
-    metadata: Dict[str, Any] = None
+    config: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     @classmethod
     def from_row(cls, row: Dict) -> 'Session':
         """Create Session from database row"""
         return cls(
-            id=row['id'],
+            id=str(row['id']),
             type=SessionType(row['type']),
             status=SessionStatus(row['status']),
-            user_id=row['user_id'],
+            user_id=str(row['user_id']),
             created_at=row['created_at'],
             updated_at=row['updated_at'],
             expires_at=row.get('expires_at'),
@@ -78,18 +80,18 @@ class Pod:
     session_id: str
     node_id: Optional[str]
     status: str
-    spec: Dict[str, Any]
-    created_at: datetime
+    spec: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
     destroyed_at: Optional[datetime] = None
-    metadata: Dict[str, Any] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     @classmethod
     def from_row(cls, row: Dict) -> 'Pod':
         """Create Pod from database row"""
         return cls(
-            id=row['id'],
-            session_id=row['session_id'],
-            node_id=row.get('node_id'),
+            id=str(row['id']),
+            session_id=str(row['session_id']),
+            node_id=str(row['node_id']) if row.get('node_id') else None,
             status=row['status'],
             spec=row.get('spec', {}),
             created_at=row['created_at'],
@@ -108,19 +110,19 @@ class Snapshot:
     size_bytes: int
     created_at: datetime
     parent_id: Optional[str] = None
-    metadata: Dict[str, Any] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     @classmethod
     def from_row(cls, row: Dict) -> 'Snapshot':
         """Create Snapshot from database row"""
         return cls(
-            id=row['id'],
-            pod_id=row['pod_id'],
+            id=str(row['id']),
+            pod_id=str(row['pod_id']),
             type=SnapshotType(row['type']),
             storage_path=row['storage_path'],
             size_bytes=row['size_bytes'],
             created_at=row['created_at'],
-            parent_id=row.get('parent_id'),
+            parent_id=str(row['parent_id']) if row.get('parent_id') else None,
             metadata=row.get('metadata', {})
         )
 
@@ -135,13 +137,13 @@ class User:
     updated_at: datetime
     quota_sessions_per_day: int = 10
     quota_max_ttl_minutes: int = 120
-    metadata: Dict[str, Any] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     @classmethod
     def from_row(cls, row: Dict) -> 'User':
         """Create User from database row"""
         return cls(
-            id=row['id'],
+            id=str(row['id']),
             email=row['email'],
             tier=row['tier'],
             created_at=row['created_at'],
