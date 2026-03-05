@@ -1,6 +1,10 @@
 """
 API layer for disposable compute platform
 SECURITY ENHANCED: Authentication and input validation wired to all endpoints
+
+⚠️ DEPRECATED: This file is no longer used in production.
+Production entry point: src/api/main_v2.py
+This file is kept for reference only and may be removed in a future version.
 """
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,12 +12,13 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import asyncio
 import json
+import os
 from datetime import datetime
 
 from src.models.session import SessionType, SessionStatus
 from src.services.platform import SessionManager, PlatformConfig
 from src.api.auth import AuthManager, get_current_user, User
-from src.utils.input_validation import validate_repo_url, validate_ttl_minutes
+from src.utils.input_validation import validate_repo_url, validate_ttl
 from src.database.session_integration import DatabaseIntegration
 from src.database.db import DatabaseConfig
 
@@ -162,7 +167,7 @@ async def create_session(
             raise HTTPException(status_code=400, detail=error_msg)
 
         # SECURITY: Validate TTL to prevent resource exhaustion
-        ttl_minutes = validate_ttl_minutes(request.ttl_minutes)
+        ttl_minutes, _ = validate_ttl(request.ttl_minutes)
 
         # Convert string type to enum
         session_type_map = {
@@ -394,13 +399,6 @@ async def fork_session(
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-
-# Background task to cleanup expired sessions
-@app.on_event("startup")
-async def startup_event():
-    """Initialize background tasks"""
-    asyncio.create_task(cleanup_expired_sessions())
 
 
 async def cleanup_expired_sessions():

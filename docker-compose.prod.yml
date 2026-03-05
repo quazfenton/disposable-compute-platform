@@ -104,9 +104,11 @@ services:
     image: grafana/grafana:latest
     container_name: dcp-grafana
     restart: unless-stopped
+    secrets:
+      - grafana_admin_password
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD_FILE=/run/secrets/grafana_admin_password
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana-data:/var/lib/grafana
@@ -118,6 +120,18 @@ services:
       - prometheus
     networks:
       - dcp-network
+    deploy:
+      secrets:
+        - grafana_admin_password
+
+# Docker secrets for sensitive data
+secrets:
+  grafana_admin_password:
+    external: true  # Create with: docker secret create grafana_admin_password < password_file
+  jwt_secret:
+    external: true  # Create with: docker secret create jwt_secret < secret_file
+  db_password:
+    external: true  # Create with: docker secret create db_password < password_file
 
   # Nginx reverse proxy
   nginx:

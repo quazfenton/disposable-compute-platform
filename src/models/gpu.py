@@ -2,7 +2,6 @@
 GPU model for managing GPU resources in disposable compute environments
 """
 from dataclasses import dataclass, field
-, field
 
 from datetime import datetime
 from enum import Enum

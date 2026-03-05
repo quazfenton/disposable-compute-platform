@@ -396,3 +396,12 @@ class TokenRefreshResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+# Global default instance for FastAPI dependency injection
+default_auth_manager = AuthManager()
+
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> User:
+    """Dependency for getting the current user from token."""
+    return await default_auth_manager.get_current_user(credentials)

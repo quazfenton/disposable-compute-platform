@@ -1,6 +1,11 @@
 """
 Enhanced API layer for disposable compute platform with production features
 Integrates: Authentication, Database, Redis, Rate Limiting, Error Handling, Health Checks
+
+⚠️ DEPRECATED: This file is no longer used in production.
+Production entry point: src/api/main_v2.py
+Many features from this file have been incorporated into main_v2.py.
+This file is kept for reference only and may be removed in a future version.
 """
 import os
 import logging

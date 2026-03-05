@@ -390,15 +390,18 @@ class PlatformMetrics:
 
 class HealthChecker:
     """Health check aggregator with alerting support"""
-    
+
     def __init__(self):
         self._checks: Dict[str, Callable] = {}
         self.alert_manager = get_alert_manager()
-    
+        self._background_task: Optional[asyncio.Task] = None
+        self._last_results: Dict[str, Any] = {}
+        self._running = False
+
     def register(self, name: str, check_func: Callable):
         """Register a health check"""
         self._checks[name] = check_func
-    
+
     async def run_checks(self) -> Dict[str, Any]:
         """Run all health checks and trigger alerts if unhealthy"""
         results = {
@@ -406,7 +409,7 @@ class HealthChecker:
             "timestamp": datetime.utcnow().isoformat(),
             "checks": {}
         }
-        
+
         for name, check_func in self._checks.items():
             try:
                 if callable(check_func):
@@ -417,9 +420,10 @@ class HealthChecker:
                         check_result = check_func()
                 else:
                     check_result = {"status": "unknown"}
-                
+
                 results["checks"][name] = check_result
-                
+                self._last_results[name] = check_result
+
                 if check_result.get("status") != "healthy":
                     results["status"] = "degraded"
                     # Trigger alert for degraded status
@@ -435,6 +439,7 @@ class HealthChecker:
                     "error": str(e)
                 }
                 results["status"] = "unhealthy"
+                self._last_results[name] = {"status": "unhealthy", "error": str(e)}
                 # Trigger critical alert for exception
                 await self.alert_manager.trigger_alert(
                     severity="critical",
@@ -442,8 +447,61 @@ class HealthChecker:
                     description=str(e),
                     metadata={"check_name": name, "error": str(e)}
                 )
-        
+
+        self._last_results = results
         return results
+
+    async def start_background_checks(self, interval_seconds: int = 30):
+        """Start background health check task"""
+        if self._running:
+            logger.warning("Background health checks already running")
+            return
+
+        self._running = True
+
+        async def background_check_loop():
+            logger.info(f"Starting background health checks every {interval_seconds}s")
+            while self._running:
+                try:
+                    await asyncio.sleep(interval_seconds)
+                    if self._running:
+                        await self.run_checks()
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Background health check error: {e}")
+
+        self._background_task = asyncio.create_task(background_check_loop())
+        logger.info(f"✅ Background health checks started (interval: {interval_seconds}s)")
+
+    async def stop_background_checks(self):
+        """Stop background health check task"""
+        if not self._running:
+            return
+
+        self._running = False
+        if self._background_task:
+            self._background_task.cancel()
+            try:
+                await self._background_task
+            except asyncio.CancelledError:
+                pass
+            self._background_task = None
+
+        logger.info("Background health checks stopped")
+
+    def get_status_summary(self) -> Dict[str, Any]:
+        """Get summary of last health check results"""
+        if not self._last_results:
+            return {"status": "unknown", "message": "No health checks run yet"}
+
+        return {
+            "overall_status": self._last_results.get("status", "unknown"),
+            "timestamp": self._last_results.get("timestamp"),
+            "checks_count": len(self._last_results.get("checks", {})),
+            "healthy_checks": sum(1 for c in self._last_results.get("checks", {}).values() if c.get("status") == "healthy"),
+            "unhealthy_checks": sum(1 for c in self._last_results.get("checks", {}).values() if c.get("status") == "unhealthy"),
+        }
 
 
 # Global metrics instance

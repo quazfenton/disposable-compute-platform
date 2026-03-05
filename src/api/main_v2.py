@@ -128,17 +128,17 @@ state = AppState()
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     logger.info("Starting Vanish Compute (VNC) API...")
-    
+
     # Initialize database
     try:
         state.database = await init_database()
         logger.info("Database initialized")
     except Exception as e:
         logger.warning(f"Database initialization failed: {e}")
-    
+
     # Initialize Auth
     state.auth_manager = AuthManager(database=state.database)
-    
+
     # Initialize Platform
     platform_config = PlatformConfig(
         domain=config.domain,
@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
         max_concurrent_sessions=config.max_concurrent_sessions
     )
     state.platform = SessionManager(platform_config)
-    
+
     # Configure Alerting
     alert_mgr = get_alert_manager()
     if alert_mgr:
@@ -155,15 +155,33 @@ async def lifespan(app: FastAPI):
             alert_mgr.configure_pagerduty(config.pagerduty_key)
         if config.opsgenie_key:
             alert_mgr.configure_opsgenie(config.opsgenie_key)
-    
+
+    # Initialize Health Checker
+    try:
+        health_checker = get_health_checker()
+        await health_checker.run_checks()  # Initial health check
+        asyncio.create_task(health_checker.start_background_checks(interval_seconds=30))
+        app.state.health_checker = health_checker
+        logger.info("✅ Health checks initialized")
+    except Exception as e:
+        logger.warning(f"Health checker initialization failed: {e}")
+
     # Start background tasks
     if state.platform:
         asyncio.create_task(state.platform.cleanup_expired_sessions())
-    
+
     logger.info("API Lifespan initialized successfully")
-    
+
     yield
-    
+
+    # Shutdown: Stop health checks
+    if hasattr(app.state, 'health_checker'):
+        try:
+            await app.state.health_checker.stop_background_checks()
+            logger.info("Health checks stopped")
+        except Exception as e:
+            logger.error(f"Error stopping health checks: {e}")
+
     if state.database:
         await close_database()
     logger.info("API Shutdown complete")
