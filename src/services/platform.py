@@ -86,13 +86,14 @@ class SnapshotManager:
 
 
 class SessionManager:
-    """Manages the lifecycle of disposable compute sessions with Redis caching and Advanced Orchestration"""
-    
-    def __init__(self, config: PlatformConfig):
+    """Manages the lifecycle of disposable compute sessions with Redis caching, Database Persistence, and Advanced Orchestration"""
+
+    def __init__(self, config: PlatformConfig, database=None):
         self.config = config
         self.sessions: Dict[str, Session] = {}
         self.environments: Dict[str, Environment] = {}
-        
+        self.database = database  # Database integration instance
+
         # Core Infrastructure
         self.orchestrator = AdvancedOrchestrator()
         self.scheduler = Scheduler(orchestrator=self.orchestrator)
@@ -100,9 +101,13 @@ class SessionManager:
         self.advanced_network = AdvancedNetworkManager()
         self.snapshot_manager = SnapshotManager(config.storage_path)
         self.alert_manager = get_alert_manager()
-        
+
         self.logger = logging.getLogger(__name__)
-        
+
+        # Concurrency control - prevents race conditions
+        self._session_lock = asyncio.Lock()
+        self._creation_locks: Dict[str, asyncio.Lock] = {}
+
         # Initialize Redis if configured
         self.redis = None
         if REDIS_AVAILABLE and config.redis_url:
@@ -149,31 +154,72 @@ class SessionManager:
             except Exception as e:
                 self.logger.error(f"Failed to publish event {event_type}: {e}")
 
-    async def create_session(self, session_type: SessionType, repo_url: str, 
-                           repo_ref: Optional[str] = None, pr_number: Optional[int] = None,
-                           ttl_minutes: Optional[int] = None) -> Session:
-        """Create a new disposable session"""
-        session_id = f"sess-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(4)}"
+    async def create_session(
+        self,
+        session_type: SessionType,
+        repo_url: str,
+        repo_ref: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        ttl_minutes: Optional[int] = None,
+        user_id: Optional[str] = None
+    ) -> Session:
+        """Create a new disposable session with database persistence and race condition prevention
         
-        # Set expiration
-        ttl = ttl_minutes or self.config.default_ttl
-        expires_at = datetime.now() + timedelta(minutes=ttl)
-        
-        session = Session(
-            id=session_id,
-            type=session_type,
-            status=SessionStatus.CREATING,
-            user_id="default-user",
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            expires_at=expires_at,
-            repo_url=repo_url,
-            repo_ref=repo_ref,
-            pr_number=pr_number
-        )
-        
-        self.sessions[session_id] = session
-        
+        SECURITY: Uses locks to prevent duplicate session creation
+        PERSISTENCE: Stores session in database before returning
+        """
+        # RACE CONDITION PREVENTION: Use lock for session creation
+        async with self._session_lock:
+            # Generate unique ID with collision check
+            max_retries = 3
+            for attempt in range(max_retries):
+                session_id = f"sess-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(4)}"
+                if session_id not in self.sessions:
+                    break
+            else:
+                raise Exception("Failed to generate unique session ID after 3 attempts")
+
+            # Set expiration
+            ttl = ttl_minutes or self.config.default_ttl
+            expires_at = datetime.now() + timedelta(minutes=ttl)
+
+            # Create session object
+            session = Session(
+                id=session_id,
+                type=session_type,
+                status=SessionStatus.CREATING,
+                user_id=user_id or "default-user",
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                expires_at=expires_at,
+                repo_url=repo_url,
+                repo_ref=repo_ref,
+                pr_number=pr_number,
+                metadata={'user_id': user_id} if user_id else {}
+            )
+
+            # DATABASE PERSISTENCE: Store in database FIRST
+            if self.database and self.database.database:
+                try:
+                    await self.database.database.create_session(
+                        session_id=session_id,
+                        session_type=SessionType(session_type),
+                        user_id=user_id or "default-user",
+                        repo_url=repo_url,
+                        repo_ref=repo_ref,
+                        pr_number=pr_number,
+                        expires_at=expires_at,
+                        metadata=session.metadata
+                    )
+                    self.logger.info(f"Session {session_id} persisted to database")
+                except Exception as e:
+                    self.logger.error(f"Failed to persist session to database: {e}")
+                    # Continue without database - graceful degradation
+
+            # Add to in-memory tracking
+            self.sessions[session_id] = session
+
+        # Continue with session creation outside lock (allows concurrent operations)
         # Schedule the pod
         pod_spec = PodSpec(
             pod_type=PodType.CONTAINER,
@@ -181,15 +227,15 @@ class SessionManager:
             image="alpine:latest",
             resource_requirements=ResourceRequirements(cpu_cores=1.0, memory_mb=1024)
         )
-        
+
         pod_request = PodRequest(
             id=f"pod-{session_id}",
             pod_spec=pod_spec,
-            user_id="default-user",
+            user_id=user_id or "default-user",
             user_tier="free",
             priority=50
         )
-        
+
         success, message, node_id = await self.scheduler.schedule(pod_request)
         if not success:
             session.status = SessionStatus.FAILED
@@ -212,13 +258,13 @@ class SessionManager:
             session.status = SessionStatus.FAILED
             self.scheduler.unschedule(pod_request.id)
             raise e
-        
+
         # Cache the session
         await self._cache_session(session)
-        
+
         # Publish event
-        await self._publish_event("session_created", {"session_id": session.id, "type": session_type.value})
-        
+        await self._publish_event("session_created", {"session_id": session.id, "type": session_type.value, "user_id": user_id})
+
         return session
 
     async def _create_preview_session(self, session: Session):
@@ -305,42 +351,113 @@ class SessionManager:
             raise
     
     async def destroy_session(self, session_id: str):
-        """Destroy a session and its resources"""
+        """Destroy a session and its resources with database persistence
+        
+        PERSISTENCE: Updates session status in database
+        """
         if session_id not in self.sessions:
             return
-        
+
         session = self.sessions[session_id]
         if session._destroy_lock:
             return
-            
+
         session._destroy_lock = True
         session.status = SessionStatus.STOPPING
-        
+
         try:
             environment_id = f"env-{session_id}"
             if environment_id in self.environments:
                 await self.basic_network.cleanup_network_with_retry(environment_id, [])
                 del self.environments[environment_id]
-            
+
             pod_id = f"pod-{session_id}"
             try:
                 await self.orchestrator.destroy_pod(pod_id)
             except:
                 pass
-                
+
             self.scheduler.unschedule(pod_id)
-            
+
             session.status = SessionStatus.DESTROYED
             session.updated_at = datetime.now()
-            
+
+            # DATABASE PERSISTENCE: Update status in database
+            if self.database and self.database.database:
+                try:
+                    await self.database.database.update_session_status(
+                        session_id,
+                        SessionStatus.DESTROYED
+                    )
+                    self.logger.info(f"Session {session_id} status updated in database")
+                except Exception as e:
+                    self.logger.error(f"Failed to update session status in database: {e}")
+
             self.logger.info(f"Successfully destroyed session {session_id}")
-            
+
         except Exception as e:
             self.logger.error(f"Error destroying session {session_id}: {e}")
             session.status = SessionStatus.ERROR
             raise
         finally:
             session._destroy_lock = False
+
+    async def recover_sessions_from_database(self):
+        """Load active sessions from database on startup
+        
+        PERSISTENCE: Restores sessions that were active before restart
+        """
+        if not self.database or not self.database.database:
+            self.logger.info("No database configured, skipping session recovery")
+            return
+
+        try:
+            # Get all active sessions from database
+            active_sessions = await self.database.database.list_user_sessions(
+                user_id=None,  # All users
+                status=SessionStatus.RUNNING
+            )
+
+            recovered_count = 0
+            for db_session in active_sessions:
+                # Check if session is expired
+                if db_session.expires_at and db_session.expires_at < datetime.now():
+                    self.logger.info(f"Session {db_session.id} expired, skipping recovery")
+                    await self.database.database.update_session_status(
+                        db_session.id,
+                        SessionStatus.DESTROYED
+                    )
+                    continue
+
+                # Skip if already in memory
+                if db_session.id in self.sessions:
+                    continue
+
+                # Recreate in-memory session
+                session = Session(
+                    id=db_session.id,
+                    type=SessionType(db_session.type),
+                    status=SessionStatus.RUNNING,
+                    user_id=db_session.user_id,
+                    created_at=db_session.created_at,
+                    updated_at=datetime.now(),
+                    expires_at=db_session.expires_at,
+                    repo_url=db_session.repo_url,
+                    repo_ref=db_session.repo_ref,
+                    pr_number=db_session.pr_number,
+                    metadata=db_session.metadata or {},
+                    container_id=db_session.metadata.get('container_id') if db_session.metadata else None
+                )
+
+                # Add to in-memory tracking
+                self.sessions[session.id] = session
+                recovered_count += 1
+                self.logger.info(f"Recovered session {session.id} for user {db_session.user_id}")
+
+            self.logger.info(f"Recovered {recovered_count} active sessions from database")
+
+        except Exception as e:
+            self.logger.error(f"Failed to recover sessions from database: {e}")
     
     async def cleanup_expired_sessions(self):
         """Remove expired sessions"""

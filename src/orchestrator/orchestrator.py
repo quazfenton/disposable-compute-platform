@@ -139,8 +139,13 @@ class GPUManager:
         self.orchestrator = orchestrator
         self.logger = logging.getLogger(__name__)
         self.allocation_timeout_seconds = 300
-        
-        asyncio.create_task(self._discover_gpus())
+        self._gpu_discovery_task: Optional[asyncio.Task] = None
+
+        try:
+            loop = asyncio.get_running_loop()
+            self._gpu_discovery_task = loop.create_task(self._discover_gpus())
+        except RuntimeError:
+            self.logger.warning("GPU discovery deferred: no running event loop")
 
     async def _discover_gpus(self):
         # Implementation for nvidia-smi discovery...
@@ -170,22 +175,38 @@ class FirecrackerOrchestrator:
         async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
             try:
                 res = None
-                if method == "PUT": res = await client.put(path, json=data)
-                elif method == "GET": res = await client.get(path)
-                
-                if res is not None:
-                    return res.json() if res.status_code != 204 else {"status": "success"}
-                return {"status": "error"}
-            except Exception:
-                return {"status": "mock_success"}
+                if method == "PUT":
+                    res = await client.put(path, json=data)
+                elif method == "GET":
+                    res = await client.get(path)
+
+                if res is None:
+                    return {"status": "error", "message": f"Unsupported method: {method}"}
+
+                if res.status_code == 204:
+                    return {"status": "success"}
+
+                if 200 <= res.status_code < 300:
+                    return res.json()
+
+                return {
+                    "status": "error",
+                    "code": res.status_code,
+                    "message": res.text,
+                }
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
 
     async def create_microvm(self, spec: PodSpec, pod_id: str) -> str:
         await self._send_request("PUT", "/actions", {"action_type": "InstanceStart"})
         return f"fcvm-{pod_id}"
 
     async def destroy_microvm(self, vm_id: str):
-        if os.path.exists(self.socket_path):
-            os.remove(self.socket_path)
+        if not os.path.exists(self.socket_path):
+            self.logger.warning(f"Firecracker socket not found for VM {vm_id}")
+            return
+
+        await self._send_request("PUT", "/actions", {"action_type": "InstanceStop"})
 
 
 class AdvancedOrchestrator:

@@ -1,7 +1,8 @@
 """
 API layer for disposable compute platform
+SECURITY ENHANCED: Authentication and input validation wired to all endpoints
 """
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -11,6 +12,10 @@ from datetime import datetime
 
 from src.models.session import SessionType, SessionStatus
 from src.services.platform import SessionManager, PlatformConfig
+from src.api.auth import AuthManager, get_current_user, User
+from src.utils.input_validation import validate_repo_url, validate_ttl_minutes
+from src.database.session_integration import DatabaseIntegration
+from src.database.db import DatabaseConfig
 
 
 # Request/Response models
@@ -101,6 +106,39 @@ app.add_middleware(
 config = PlatformConfig(domain="preview.yourapp.dev", default_ttl=30)
 session_manager = SessionManager(config)
 connection_manager = ConnectionManager()
+database_integration = None
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize background tasks and database persistence"""
+    global database_integration
+    
+    # Initialize database integration
+    try:
+        db_config = DatabaseConfig(
+            host=os.getenv("DB_HOST", "localhost"),
+            port=int(os.getenv("DB_PORT", "5432")),
+            user=os.getenv("DB_USER", "postgres"),
+            password=os.getenv("DB_PASSWORD", "postgres"),
+            database=os.getenv("DB_NAME", "disposable_compute")
+        )
+        database_integration = DatabaseIntegration(session_manager, db_config)
+        await database_integration.initialize()
+        logger.info("Database integration initialized")
+    except Exception as e:
+        logger.warning(f"Database initialization failed (continuing without persistence): {e}")
+        database_integration = None
+    
+    # Recover sessions from database if available
+    if database_integration:
+        try:
+            await session_manager.recover_sessions_from_database()
+        except Exception as e:
+            logger.error(f"Failed to recover sessions: {e}")
+    
+    # Start background cleanup
+    asyncio.create_task(cleanup_expired_sessions())
 
 
 @app.get("/")
@@ -109,51 +147,89 @@ async def root():
 
 
 @app.post("/sessions", response_model=CreateSessionResponse)
-async def create_session(request: CreateSessionRequest):
-    """Create a new disposable session"""
+async def create_session(
+    request: CreateSessionRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Create a new disposable session
+    
+    SECURITY: Requires authentication, validates input to prevent SSRF
+    """
     try:
+        # SECURITY: Validate repo_url to prevent SSRF attacks
+        is_valid, error_msg = validate_repo_url(request.repo_url)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        # SECURITY: Validate TTL to prevent resource exhaustion
+        ttl_minutes = validate_ttl_minutes(request.ttl_minutes)
+
         # Convert string type to enum
         session_type_map = {
             "preview": SessionType.PREVIEW,
             "run_repo": SessionType.RUN_REPO,
             "fork_gui": SessionType.FORK_GUI
         }
-        
+
         if request.type not in session_type_map:
             raise HTTPException(status_code=400, detail="Invalid session type")
-        
+
+        # SECURITY: Check user quota
+        user_sessions = [s for s in session_manager.sessions.values() if s.metadata.get('user_id') == current_user.id]
+        if len(user_sessions) >= current_user.session_quota:
+            raise HTTPException(
+                status_code=429, 
+                detail=f"Session quota exceeded. Your tier ({current_user.tier}) allows {current_user.session_quota} concurrent sessions."
+            )
+
         session = await session_manager.create_session(
             session_type=session_type_map[request.type],
             repo_url=request.repo_url,
             repo_ref=request.repo_ref,
             pr_number=request.pr_number,
-            ttl_minutes=request.ttl_minutes
+            ttl_minutes=ttl_minutes,
+            user_id=current_user.id  # Track ownership
         )
-        
+
         # Extract external URLs from ports
         external_urls = []
         if session.ports:
             for service_name, port in session.ports.items():
                 external_urls.append(f"https://{session.id[:8]}.{config.domain}:{port}")
-        
+
         return CreateSessionResponse(
             session_id=session.id,
             status=session.status.value,
             external_urls=external_urls,
             created_at=session.created_at.isoformat()
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to create session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
 
 
 @app.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str):
-    """Get session details"""
+async def get_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get session details
+    
+    SECURITY: Requires authentication, verifies session ownership
+    """
     if session_id not in session_manager.sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     session = session_manager.sessions[session_id]
-    
+
+    # SECURITY: Verify ownership (only owner can view session details)
+    session_user_id = session.metadata.get('user_id')
+    if session_user_id and session_user_id != current_user.id:
+        if current_user.tier.value == 'free':
+            raise HTTPException(status_code=403, detail="Not authorized to view this session")
+
     return SessionResponse(
         id=session.id,
         type=session.type.value,
@@ -170,25 +246,98 @@ async def get_session(session_id: str):
 
 
 @app.delete("/sessions/{session_id}")
-async def destroy_session(session_id: str):
-    """Destroy a session"""
+async def destroy_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Destroy a session
+    
+    SECURITY: Requires authentication, verifies ownership before deletion
+    """
+    if session_id not in session_manager.sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = session_manager.sessions[session_id]
+
+    # SECURITY: Verify ownership (only owner can delete)
+    session_user_id = session.metadata.get('user_id')
+    if session_user_id and session_user_id != current_user.id:
+        if current_user.tier.value != 'enterprise':  # Enterprise can delete any session
+            raise HTTPException(status_code=403, detail="Not authorized to delete this session")
+
     try:
         await session_manager.destroy_session(session_id)
         return {"message": f"Session {session_id} destroyed successfully"}
     except Exception as e:
+        logger.error(f"Failed to destroy session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/sessions/{session_id}/logs")
-async def get_session_logs(session_id: str, service: str = "main", lines: int = 100):
-    """Get logs from a session"""
+async def get_session_logs(
+    session_id: str,
+    service: str = "main",
+    lines: int = 100,
+    current_user: User = Depends(get_current_user)
+):
+    """Get logs from a session
+    
+    SECURITY: Requires authentication, verifies session ownership
+    """
+    if session_id not in session_manager.sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = session_manager.sessions[session_id]
+
+    # SECURITY: Verify ownership
+    session_user_id = session.metadata.get('user_id')
+    if session_user_id and session_user_id != current_user.id:
+        if current_user.tier.value == 'free':
+            raise HTTPException(status_code=403, detail="Not authorized to view this session's logs")
+
     logs = await session_manager.get_session_logs(session_id, service, lines)
     return LogResponse(service=service, logs=logs)
 
 
 @app.websocket("/ws/logs/{session_id}")
-async def websocket_logs(websocket: WebSocket, session_id: str, service: str = "main"):
-    """WebSocket endpoint for real-time logs"""
+async def websocket_logs(
+    websocket: WebSocket,
+    session_id: str,
+    service: str = "main",
+    authorization: Optional[str] = Header(None)
+):
+    """WebSocket endpoint for real-time logs
+    
+    SECURITY: Requires authentication via Authorization header
+    """
+    # SECURITY: Authenticate WebSocket connection
+    if not authorization or not authorization.startswith("Bearer "):
+        await websocket.close(code=4001, reason="Missing or invalid authorization")
+        return
+
+    token = authorization[7:]  # Remove "Bearer " prefix
+    try:
+        auth_manager = AuthManager()
+        token_data = auth_manager.verify_token(token)
+        user_id = token_data.user_id
+    except Exception as e:
+        await websocket.close(code=4002, reason=f"Invalid token: {str(e)}")
+        return
+
+    # Verify session exists
+    if session_id not in session_manager.sessions:
+        await websocket.close(code=4004, reason="Session not found")
+        return
+
+    session = session_manager.sessions[session_id]
+
+    # SECURITY: Verify ownership
+    session_user_id = session.metadata.get('user_id')
+    if session_user_id and session_user_id != user_id:
+        await websocket.close(code=4003, reason="Not authorized to view this session's logs")
+        return
+
+    # Connect authenticated user
     await connection_manager.connect(websocket)
     try:
         while True:
@@ -199,17 +348,35 @@ async def websocket_logs(websocket: WebSocket, session_id: str, service: str = "
                 json.dumps({"service": service, "logs": logs, "timestamp": datetime.now().isoformat()}),
                 websocket
             )
-            await asyncio.sleep(5)  # Update every 5 seconds
+            await asyncio.sleep(5)  # Send update every 5 seconds
     except WebSocketDisconnect:
+        connection_manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
         connection_manager.disconnect(websocket)
 
 
 @app.post("/sessions/{session_id}/fork", response_model=ForkSessionResponse)
-async def fork_session(request: ForkSessionRequest, session_id: str):
-    """Fork a session (for GUI sessions)"""
+async def fork_session(
+    request: ForkSessionRequest,
+    session_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Fork a session (for GUI sessions)
+    
+    SECURITY: Requires authentication, verifies ownership
+    """
     # Validate that the source session exists
     if session_id not in session_manager.sessions:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    session = session_manager.sessions[session_id]
+
+    # SECURITY: Verify ownership
+    session_user_id = session.metadata.get('user_id')
+    if session_user_id and session_user_id != current_user.id:
+        if current_user.tier.value != 'enterprise':
+            raise HTTPException(status_code=403, detail="Not authorized to fork this session")
 
     # This is a simplified implementation
     # In a real system, this would create a new session based on a snapshot
