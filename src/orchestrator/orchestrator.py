@@ -2,15 +2,13 @@
 Advanced orchestrator for Vanish Compute (VNC) with VM, microVM, and GPU support
 """
 import asyncio
-import docker
 import logging
-import json
 import httpx
 import subprocess
 import os
 import xml.sax.saxutils
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+from datetime import datetime
 
 # Optional import for libvirt (for VM support)
 try:
@@ -20,9 +18,9 @@ except ImportError:
     libvirt = None
     LIBVIRT_AVAILABLE = False
 
-from src.models.pod import Pod, PodSpec, PodStatus, PodType, GPUResource, ResourceRequirements
-from src.models.vm import VM, VMSpec, VMStatus, VMType, VMDisk, VMNetworkInterface, Hypervisor
-from src.models.gpu import GPUDevice, GPUStatus, GPUAllocation, GPUConfiguration, GPUFamily
+from src.models.pod import Pod, PodSpec, PodStatus, PodType, GPUResource
+from src.models.vm import VMSpec, VMStatus, VMType
+from src.models.gpu import GPUDevice, GPUAllocation
 from src.containers.orchestrator import ContainerOrchestrator, ContainerConfig
 
 
@@ -257,7 +255,7 @@ class AdvancedOrchestrator:
         disk = await self.vm_orchestrator.create_vm_disk(pod.spec.image, 10)
         
         # Create a dummy VMSpec to avoid Type Errors in the consolidated logic
-        from src.models.vm import VMSpec, VMType
+        from src.models.vm import VMSpec
         dummy_spec = VMSpec(
             vm_type=VMType.LINUX,
             base_image=pod.spec.image,

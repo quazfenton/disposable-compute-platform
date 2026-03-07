@@ -7,17 +7,14 @@ import tempfile
 import yaml
 import logging
 from git import Repo
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from datetime import datetime
-import subprocess
 import json
 
 from src.models.session import Session, ServiceDefinition
 from src.types.platform_types import SessionStatus
 from src.models.environment import Environment
 from src.services.platform import SessionManager
-from src.containers.orchestrator import ContainerOrchestrator
-from src.networking.router import NetworkManager
 from src.utils.input_validation import validate_repo_url, validate_ref_name
 
 logger = logging.getLogger(__name__)

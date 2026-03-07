@@ -1,9 +1,8 @@
 """
 Async database connection and operations
 """
-import asyncio
 import logging
-from typing import Optional, Dict, Any, List, TypeVar, Type
+from typing import Optional, Dict, Any, List, TypeVar
 from datetime import datetime
 import json
 from contextlib import asynccontextmanager

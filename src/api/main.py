@@ -9,13 +9,13 @@ This file is kept for reference only and may be removed in a future version.
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 import asyncio
 import json
 import os
 from datetime import datetime
 
-from src.models.session import SessionType, SessionStatus
+from src.models.session import SessionType
 from src.services.platform import SessionManager, PlatformConfig
 from src.api.auth import AuthManager, get_current_user, User
 from src.utils.input_validation import validate_repo_url, validate_ttl

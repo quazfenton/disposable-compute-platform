@@ -11,7 +11,7 @@ Fixes:
 import asyncio
 import secrets
 import logging
-from typing import Dict, Optional
+from typing import Dict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

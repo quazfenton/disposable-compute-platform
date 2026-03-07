@@ -5,7 +5,7 @@ Integrates all three components: Preview Environments, Run This Repo, and Forkab
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from src.services.platform import SessionManager, PlatformConfig, SessionType
 from src.utils.security import integrate_security_manager

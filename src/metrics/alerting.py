@@ -1,7 +1,5 @@
 import logging
-import json
-import httpx
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from datetime import datetime
 from dataclasses import dataclass
 

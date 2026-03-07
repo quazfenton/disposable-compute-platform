@@ -1,22 +1,17 @@
 """
 Forkable GUI Sessions implementation for disposable compute platform
 """
-import asyncio
 import os
 import json
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from datetime import datetime
-import tempfile
 
 from src.models.session import Session, SessionStatus
-from src.types.models import Snapshot
 from src.models.environment import Environment
 from src.services.platform import SessionManager, SnapshotManager
 
 
 import docker
-import tarfile
-import io
 
 class StateCaptureAdapter:
     """Base class for state capture adapters"""

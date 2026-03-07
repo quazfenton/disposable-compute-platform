@@ -2,18 +2,15 @@
 Monitoring and observability module for disposable compute platform
 """
 import asyncio
-import time
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, Optional, Any, Callable
 from datetime import datetime
 import logging
 from dataclasses import dataclass
 import psutil
 import GPUtil
 from prometheus_client import Counter, Histogram, Gauge, Summary, start_http_server
-from contextlib import asynccontextmanager
 
 from src.models.pod import Pod
-from src.models.session import Session
 from src.types.platform_types import HealthStatusDTO
 
 

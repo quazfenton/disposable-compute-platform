@@ -7,9 +7,9 @@ import json
 import os
 import secrets
 import pickle
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from datetime import datetime, timedelta
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # Try imports
 try:
@@ -19,9 +19,8 @@ except ImportError:
     redis = None
     REDIS_AVAILABLE = False
 
-from src.models.session import Session, SessionType, SessionStatus, ServiceDefinition
+from src.models.session import Session, SessionType, SessionStatus
 from src.models.environment import Environment
-from src.containers.orchestrator import ContainerOrchestrator
 from src.networking.router import NetworkManager as BasicNetworkManager
 from src.networking_advanced.network_manager import AdvancedNetworkManager
 from src.orchestrator.orchestrator import AdvancedOrchestrator

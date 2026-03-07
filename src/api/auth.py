@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from functools import wraps
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field

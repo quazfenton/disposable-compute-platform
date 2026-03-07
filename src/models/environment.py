@@ -4,7 +4,6 @@ Environment model for managing disposable compute environments
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
-import uuid
 
 
 @dataclass

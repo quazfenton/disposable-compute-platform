@@ -5,7 +5,7 @@ import asyncio
 import logging
 import websockets
 import json
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 

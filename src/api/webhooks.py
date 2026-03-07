@@ -5,13 +5,11 @@ Automates creation and cleanup of preview environments from GitHub events
 import hmac
 import hashlib
 import logging
-import json
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from fastapi import APIRouter, Request, Header, HTTPException, Depends
 
 from src.main import platform
-from src.services.platform import SessionType
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks/github", tags=["webhooks"])

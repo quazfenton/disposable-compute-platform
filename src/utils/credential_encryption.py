@@ -10,8 +10,6 @@ from typing import Dict, Optional, Any
 from datetime import datetime, timedelta
 from pathlib import Path
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 logger = logging.getLogger(__name__)
 

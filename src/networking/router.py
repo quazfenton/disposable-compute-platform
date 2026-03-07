@@ -1,15 +1,10 @@
 """
 Networking and routing service for disposable compute platform
 """
-import asyncio
 import logging
 import os
-import subprocess
-import hashlib
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-import socket
-from contextlib import closing
 
 
 @dataclass

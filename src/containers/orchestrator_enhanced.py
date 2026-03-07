@@ -3,12 +3,11 @@ Enhanced container orchestrator with security hardening for disposable compute p
 """
 import docker
 import logging
-from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
 from datetime import datetime
-import asyncio
 
-from src.models.session import Session, ServiceDefinition
+from src.models.session import ServiceDefinition
 from src.models.environment import Environment
 
 logger = logging.getLogger(__name__)

@@ -5,12 +5,12 @@ Provides persistence, recovery, and audit trail
 import asyncio
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from src.database.db import Database, DatabaseConfig, init_database, get_database
-from src.database.models import Session as DBSession, SessionStatus, SessionType
+from src.database.db import Database, DatabaseConfig, init_database
+from src.database.models import SessionStatus, SessionType
 from src.models.session import Session
-from src.services.platform import SessionManager, PlatformConfig
+from src.services.platform import SessionManager
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,6 @@
 """
 Resource optimization module for disposable compute platform
 """
-import asyncio
-import heapq
 import statistics
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta

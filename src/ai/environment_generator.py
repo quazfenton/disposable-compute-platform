@@ -6,8 +6,7 @@ Generates infrastructure configurations from natural language descriptions
 import openai
 import json
 import logging
-import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from datetime import datetime
 
 try:

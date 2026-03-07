@@ -3,19 +3,17 @@ GPU-aware scheduler for disposable compute platform
 Implements production-grade scheduling with resource management,
 constraint validation, and priority-based placement.
 """
-import asyncio
 import logging
 import heapq
 from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 import math
 import time
 import threading
-from contextlib import contextmanager
 
-from src.models.pod import Pod, PodSpec, PodStatus, ResourceRequirements, GPUResource, ComputeNode
+from src.models.pod import PodSpec, GPUResource, ComputeNode
 from src.models.gpu import GPUDevice, GPUStatus, GPUFamily
 
 

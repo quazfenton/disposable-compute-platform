@@ -6,7 +6,7 @@ import logging
 import pickle
 import json
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 try:
     import redis.asyncio as aioredis

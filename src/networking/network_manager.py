@@ -1,8 +1,7 @@
 import asyncio
 import logging
 import socket
-import ssl
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from contextlib import closing
 import websockets
 from dataclasses import dataclass

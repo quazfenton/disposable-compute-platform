@@ -8,12 +8,9 @@ Many features from this file have been incorporated into main_v2.py.
 This file is kept for reference only and may be removed in a future version.
 """
 import os
-import logging
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 # Import models
 from src.models.session import SessionType, SessionStatus
@@ -21,10 +18,10 @@ from src.services.platform import SessionManager, PlatformConfig
 from src.api.auth import AuthManager, User, get_current_user, require_auth, require_quota_check
 from src.api.middleware.rate_limit import rate_limit_middleware, setup_rate_limiting, quota_manager
 from src.api.middleware.error_handler import setup_error_handlers, NotFoundError, ValidationError
-from src.services.health import init_health_checker, get_health_checker
+from src.services.health import init_health_checker
 from src.database.db import DatabaseConfig
 from src.database.session_integration import extend_session_manager_with_database, SessionHistory
-from src.database.redis_integration import init_redis_store, connect_redis, get_redis_store, RedisConfig
+from src.database.redis_integration import init_redis_store, connect_redis, RedisConfig
 from src.utils.input_validation import InputValidator
 from src.utils.logging_config import setup_logging, get_logger
 

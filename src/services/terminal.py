@@ -9,7 +9,7 @@ import fcntl
 import struct
 import termios
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)

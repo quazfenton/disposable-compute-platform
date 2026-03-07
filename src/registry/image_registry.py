@@ -5,10 +5,9 @@ Manages container images with registry integration, scanning, and caching
 import docker
 import json
 import logging
-import hashlib
 import asyncio
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import aiofiles

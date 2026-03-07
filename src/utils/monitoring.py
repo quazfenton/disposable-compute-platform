@@ -3,7 +3,6 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 import psutil
-import time
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 import threading
 

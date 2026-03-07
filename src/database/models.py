@@ -2,10 +2,9 @@
 Database models and connection management for disposable compute platform
 """
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from enum import Enum
 from dataclasses import dataclass, field
-import uuid
 
 # Try to import asyncpg, fall back to mock if not available
 try:

@@ -3,7 +3,6 @@ DevContainer specification parser for disposable compute platform
 Converts .devcontainer/devcontainer.json to platform service definitions
 """
 import json
-import os
 import tempfile
 import logging
 from typing import Dict, List, Optional, Any, Union
@@ -252,7 +251,7 @@ class DevContainerParser:
                             break
                 
                 if not config_file.exists():
-                    self.logger.info(f"No devcontainer.json found in repository")
+                    self.logger.info("No devcontainer.json found in repository")
                     return None
                 
                 # Parse the config

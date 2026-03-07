@@ -6,8 +6,7 @@ import socket
 import logging
 from typing import Optional, List, Tuple, Dict, Any
 from urllib.parse import urlparse
-from datetime import timedelta
-from pydantic import BaseModel, validator, HttpUrl, Field
+from pydantic import BaseModel, validator, Field
 
 logger = logging.getLogger(__name__)
 

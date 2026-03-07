@@ -7,12 +7,11 @@ import os
 import docker
 import logging
 from git import Repo
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, Optional, Any
 from datetime import datetime
-import subprocess
 import json
 
-from src.models.session import Session, ServiceDefinition, SessionStatus
+from src.models.session import Session, SessionStatus
 from src.models.environment import Environment
 from src.services.platform import SessionManager
 from src.utils.input_validation import validate_repo_url, validate_ref_name
@@ -61,10 +60,10 @@ class ImageBuilder:
                 if not os.path.exists(dockerfile_path) and runtime_info:
                     with open(dockerfile_path, 'w') as f:
                         f.write(f"FROM {runtime_info['image']}\n")
-                        f.write(f"WORKDIR /app\n")
-                        f.write(f"COPY . .\n")
+                        f.write("WORKDIR /app\n")
+                        f.write("COPY . .\n")
                         if runtime_info.get('files') and 'package.json' in runtime_info['files']:
-                            f.write(f"RUN npm install\n")
+                            f.write("RUN npm install\n")
                         f.write(f"EXPOSE {runtime_info.get('port', 8080)}\n")
                         f.write(f"CMD {runtime_info['default_command']}\n")
                 

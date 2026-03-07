@@ -4,29 +4,20 @@ Production-ready API for Disposable Compute Platform
 import os
 import asyncio
 import logging
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, validator
 
 # Internal imports
-from src.scheduler.scheduler import Scheduler, Node, NodeStatus, PodRequest, SchedulingStatus
-from src.models.pod import PodSpec, PodType, ResourceRequirements
-from src.models.gpu import GPUDevice, GPUStatus, GPUAllocation, GPUConfiguration, GPUCluster
-from src.orchestrator.orchestrator import AdvancedOrchestrator
-from src.streaming.streaming_server import StreamingManager
-from src.storage.storage_manager import StorageManager
 from src.api.auth import AuthManager, User, UserTier
-from src.metrics.metrics import get_metrics, get_health_checker, HealthChecker
+from src.metrics.metrics import get_metrics, get_health_checker
 from src.metrics.alerting import get_alert_manager
 from src.services.platform import SessionManager, PlatformConfig, SessionType
-from src.database.db import init_database, close_database, get_database, Database
-from src.database.models import SessionStatus, SnapshotType
+from src.database.db import init_database, close_database, Database
 
 # Configure logging
 logging.basicConfig(

@@ -1,14 +1,11 @@
 import asyncio
 import logging
-import websockets
-import json
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
 import cv2
 import numpy as np
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCConfiguration, RTCIceServer
-from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder
 from ..networking.network_manager import NetworkManager
 
 @dataclass
