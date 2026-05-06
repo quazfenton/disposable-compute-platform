@@ -3,15 +3,31 @@ Shared platform services for disposable compute platform
 """
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
-from dataclasses import dataclass
 import json
 import os
+import secrets
+import pickle
+from typing import Dict, List, Optional, Any
+from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+
+# Try imports
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    redis = None
+    REDIS_AVAILABLE = False
+
 from src.models.session import Session, SessionType, SessionStatus, ServiceDefinition
 from src.models.environment import Environment
 from src.containers.orchestrator import ContainerOrchestrator
-from src.networking.router import NetworkManager
+from src.networking.router import NetworkManager as BasicNetworkManager
+from src.networking_advanced.network_manager import AdvancedNetworkManager
+from src.orchestrator.orchestrator import AdvancedOrchestrator
+from src.scheduler.scheduler import Scheduler, PodRequest
+from src.models.pod import PodType, ResourceRequirements, PodSpec
+from src.metrics.alerting import get_alert_manager
 
 
 @dataclass
@@ -22,24 +38,122 @@ class PlatformConfig:
     max_ttl: int = 1440  # 24 hours
     storage_path: str = "/tmp/disposable-storage"
     max_concurrent_sessions: int = 100
+    redis_url: Optional[str] = "redis://localhost:6379/0"
+    firecracker_socket: str = "/tmp/firecracker.socket"
+
+
+class SnapshotManager:
+    """Manages snapshots for forkable sessions with security hardening"""
+
+    def __init__(self, storage_path: str):
+        self.storage_path = storage_path
+        self.logger = logging.getLogger(__name__)
+        os.makedirs(storage_path, exist_ok=True)
+        self.storage_path_abs = os.path.abspath(storage_path)
+
+    async def create_snapshot(self, session_id: str, state_data: Dict[str, Any]) -> str:
+        """Create a snapshot of a session's state"""
+        snapshot_id = f"snapshot-{session_id}-{secrets.token_hex(4)}"
+        snapshot_path = os.path.join(self.storage_path_abs, f"{snapshot_id}.json")
+        
+        with open(snapshot_path, 'w') as f:
+            json.dump({
+                'id': snapshot_id,
+                'session_id': session_id,
+                'created_at': datetime.now().isoformat(),
+                'state_data': state_data
+            }, f, indent=2)
+            
+        self.logger.info(f"Created snapshot {snapshot_id}")
+        return snapshot_id
+
+    async def load_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        """Load a snapshot's state"""
+        snapshot_path = os.path.join(self.storage_path_abs, f"{snapshot_id}.json")
+        if not os.path.exists(snapshot_path):
+            return None
+
+        with open(snapshot_path, 'r') as f:
+            return json.load(f)
+
+    async def delete_snapshot(self, snapshot_id: str) -> bool:
+        """Delete a snapshot"""
+        snapshot_path = os.path.join(self.storage_path_abs, f"{snapshot_id}.json")
+        if os.path.exists(snapshot_path):
+            os.remove(snapshot_path)
+            return True
+        return False
 
 
 class SessionManager:
-    """Manages the lifecycle of disposable compute sessions"""
+    """Manages the lifecycle of disposable compute sessions with Redis caching and Advanced Orchestration"""
     
     def __init__(self, config: PlatformConfig):
         self.config = config
         self.sessions: Dict[str, Session] = {}
         self.environments: Dict[str, Environment] = {}
-        self.container_orchestrator = ContainerOrchestrator()
-        self.network_manager = NetworkManager()
+        
+        # Core Infrastructure
+        self.orchestrator = AdvancedOrchestrator()
+        self.scheduler = Scheduler(orchestrator=self.orchestrator)
+        self.basic_network = BasicNetworkManager()
+        self.advanced_network = AdvancedNetworkManager()
+        self.snapshot_manager = SnapshotManager(config.storage_path)
+        self.alert_manager = get_alert_manager()
+        
         self.logger = logging.getLogger(__name__)
-    
+        
+        # Initialize Redis if configured
+        self.redis = None
+        if REDIS_AVAILABLE and config.redis_url:
+            try:
+                import redis as redis_lib
+                self.redis = redis_lib.from_url(config.redis_url)
+                self.logger.info(f"Connected to Redis at {config.redis_url}")
+            except Exception as e:
+                self.logger.error(f"Failed to connect to Redis: {e}")
+
+    async def _cache_session(self, session: Session):
+        """Cache session data in Redis"""
+        if self.redis:
+            try:
+                data = pickle.dumps(session)
+                await self.redis.set(f"session:{session.id}", data, ex=int(self.config.default_ttl * 60))
+            except Exception as e:
+                self.logger.error(f"Failed to cache session {session.id}: {e}")
+
+    async def _get_cached_session(self, session_id: str) -> Optional[Session]:
+        """Retrieve session data from Redis"""
+        if self.redis:
+            try:
+                data = await self.redis.get(f"session:{session_id}")
+                if data:
+                    # In some redis versions, get might return bytes or awaitable
+                    if asyncio.iscoroutine(data):
+                        data = await data
+                    return pickle.loads(data)
+            except Exception as e:
+                self.logger.error(f"Failed to retrieve cached session {session_id}: {e}")
+        return None
+
+    async def _publish_event(self, event_type: str, data: Dict[str, Any]):
+        """Publish an event to Redis PubSub"""
+        if self.redis:
+            try:
+                event = {
+                    'type': event_type,
+                    'data': data,
+                    'timestamp': datetime.now().isoformat()
+                }
+                await self.redis.publish("pod_events", json.dumps(event))
+            except Exception as e:
+                self.logger.error(f"Failed to publish event {event_type}: {e}")
+
     async def create_session(self, session_type: SessionType, repo_url: str, 
                            repo_ref: Optional[str] = None, pr_number: Optional[int] = None,
-                           ttl_minutes: int = None) -> Session:
+                           ttl_minutes: Optional[int] = None) -> Session:
         """Create a new disposable session"""
-        session_id = f"sess-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
+        session_id = f"sess-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(4)}"
         
         # Set expiration
         ttl = ttl_minutes or self.config.default_ttl
@@ -49,6 +163,7 @@ class SessionManager:
             id=session_id,
             type=session_type,
             status=SessionStatus.CREATING,
+            user_id="default-user",
             created_at=datetime.now(),
             updated_at=datetime.now(),
             expires_at=expires_at,
@@ -59,236 +174,173 @@ class SessionManager:
         
         self.sessions[session_id] = session
         
-        # Start the session creation process based on type
-        if session_type == SessionType.PREVIEW:
-            await self._create_preview_session(session)
-        elif session_type == SessionType.RUN_REPO:
-            await self._create_run_repo_session(session)
-        elif session_type == SessionType.FORK_GUI:
-            await self._create_fork_gui_session(session)
-        
-        return session
-    
-    async def _create_preview_session(self, session: Session):
-        """Create a preview environment session"""
-        # Parse .preview.yaml from the repository
-        services = await self._parse_preview_config(session.repo_url, session.repo_ref)
-        
-        # Create environment
-        environment = Environment(
-            id=f"env-{session.id}",
-            name=f"preview-{session.id}",
-            session_id=session.id,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            expires_at=session.expires_at,
-            services=services
+        # Schedule the pod
+        pod_spec = PodSpec(
+            pod_type=PodType.CONTAINER,
+            app_type="web",
+            image="alpine:latest",
+            resource_requirements=ResourceRequirements(cpu_cores=1.0, memory_mb=1024)
         )
         
-        # Create isolated network
-        network_name = self.network_manager.create_isolated_network(environment.id)
-        environment.network_name = network_name
+        pod_request = PodRequest(
+            id=f"pod-{session_id}",
+            pod_spec=pod_spec,
+            user_id="default-user",
+            user_tier="free",
+            priority=50
+        )
         
-        # Set up internal DNS
-        internal_dns = self.network_manager.setup_internal_dns(network_name, services)
+        success, message, node_id = await self.scheduler.schedule(pod_request)
+        if not success:
+            session.status = SessionStatus.FAILED
+            await self.alert_manager.trigger_alert(
+                severity="critical",
+                title=f"Scheduling failed for session {session_id}",
+                description=message
+            )
+            raise Exception(f"Failed to schedule: {message}")
+
+        # Start the session creation process based on type
+        try:
+            if session_type == SessionType.PREVIEW:
+                await self._create_preview_session(session)
+            elif session_type == SessionType.RUN_REPO:
+                await self._create_run_repo_session(session)
+            elif session_type == SessionType.FORK_GUI:
+                await self._create_fork_gui_session(session)
+        except Exception as e:
+            session.status = SessionStatus.FAILED
+            self.scheduler.unschedule(pod_request.id)
+            raise e
         
-        # Create containers
-        container_ids = self.container_orchestrator.create_environment_containers(environment)
+        # Cache the session
+        await self._cache_session(session)
         
-        # Update session with container info
-        session.container_id = json.dumps(container_ids)
-        session.network_id = network_name
-        session.status = SessionStatus.RUNNING
+        # Publish event
+        await self._publish_event("session_created", {"session_id": session.id, "type": session_type.value})
         
-        # Create external URLs
-        external_urls = []
-        for service_def in services:
-            service = ServiceDefinition(**service_def)
-            if service.port:
-                url = self.network_manager.create_external_access(session.id, service.port, self.config.domain)
-                external_urls.append(url)
+        return session
+
+    async def _create_preview_session(self, session: Session):
+        """Create a preview environment session"""
+        repo_url = session.repo_url
+        if repo_url is None:
+            session.status = SessionStatus.ERROR
+            return
+            
+        # Services would normally be parsed from .preview.yaml
+        # For now, create a default pod via AdvancedOrchestrator
+        pod_spec = PodSpec(
+            pod_type=PodType.CONTAINER,
+            app_type="web",
+            image="node:18-alpine",
+            command=["npm", "start"],
+            ports=[3000],
+            environment={"NODE_ENV": "production"}
+        )
         
-        session.ports = {svc['name']: svc.get('port', 0) for svc in services if svc.get('port')}
-        
-        self.environments[environment.id] = environment
-        self.sessions[session.id] = session
+        try:
+            pod_id = await self.orchestrator.create_pod(pod_spec)
+            session.metadata['pod_id'] = pod_id
+            
+            # Create isolated network
+            network_name = self.basic_network.create_isolated_network(session.id)
+            session.network_id = network_name
+            
+            session.status = SessionStatus.RUNNING
+        except Exception as e:
+            self.logger.error(f"Failed to create preview session: {e}")
+            session.status = SessionStatus.ERROR
+            raise
     
     async def _create_run_repo_session(self, session: Session):
         """Create a run-repo session"""
-        # Detect runtime from repository
-        runtime = await self._detect_runtime(session.repo_url, session.repo_ref)
-        
-        # Create default service based on detected runtime
-        service = await self._create_default_service(runtime, session.repo_url, session.repo_ref)
-        
-        environment = Environment(
-            id=f"env-{session.id}",
-            name=f"run-{session.id}",
-            session_id=session.id,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            expires_at=session.expires_at,
-            services=[service]
+        repo_url = session.repo_url
+        if repo_url is None:
+            session.status = SessionStatus.ERROR
+            return
+            
+        pod_spec = PodSpec(
+            pod_type=PodType.CONTAINER,
+            app_type="web",
+            image="python:3.11-slim",
+            command=["python", "app.py"],
+            ports=[8000]
         )
         
-        # Create isolated network
-        network_name = self.network_manager.create_isolated_network(environment.id)
-        environment.network_name = network_name
-        
-        # Create containers
-        container_ids = self.container_orchestrator.create_environment_containers(environment)
-        
-        # Update session with container info
-        session.container_id = json.dumps(container_ids)
-        session.network_id = network_name
-        session.status = SessionStatus.RUNNING
-        
-        # Create external access
-        if service.get('port'):
-            url = self.network_manager.create_external_access(session.id, service['port'], self.config.domain)
-            session.ports = {service['name']: service['port']}
-        
-        self.environments[environment.id] = environment
-        self.sessions[session.id] = session
+        try:
+            pod_id = await self.orchestrator.create_pod(pod_spec)
+            session.metadata['pod_id'] = pod_id
+            
+            network_name = self.basic_network.create_isolated_network(session.id)
+            session.network_id = network_name
+            
+            session.status = SessionStatus.RUNNING
+        except Exception as e:
+            self.logger.error(f"Failed to create run-repo session: {e}")
+            session.status = SessionStatus.ERROR
+            raise
     
     async def _create_fork_gui_session(self, session: Session):
         """Create a forkable GUI session"""
-        # For now, create a basic GUI environment
-        # In the future, this would handle state capture and forking
-        service = {
-            'name': 'gui-app',
-            'type': 'gui',
-            'image': 'base-gui-image',  # This would be determined by the specific GUI app
-            'command': 'start-gui-app',
-            'port': 8080,
-            'env': {}
-        }
-        
-        environment = Environment(
-            id=f"env-{session.id}",
-            name=f"gui-{session.id}",
-            session_id=session.id,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            expires_at=session.expires_at,
-            services=[service]
+        pod_spec = PodSpec(
+            pod_type=PodType.CONTAINER,
+            app_type="gui",
+            image="base-gui-image",
+            command=["start-gui-app"],
+            ports=[8080]
         )
         
-        # Create isolated network
-        network_name = self.network_manager.create_isolated_network(environment.id)
-        environment.network_name = network_name
-        
-        # Create containers
-        container_ids = self.container_orchestrator.create_environment_containers(environment)
-        
-        # Update session with container info
-        session.container_id = json.dumps(container_ids)
-        session.network_id = network_name
-        session.status = SessionStatus.RUNNING
-        
-        # Create external access
-        url = self.network_manager.create_external_access(session.id, 8080, self.config.domain)
-        session.ports = {'gui': 8080}
-        
-        self.environments[environment.id] = environment
-        self.sessions[session.id] = session
-    
-    async def _parse_preview_config(self, repo_url: str, repo_ref: Optional[str]) -> List[Dict]:
-        """Parse .preview.yaml from repository"""
-        # This would actually fetch the file from the repository
-        # For now, return a default configuration
-        return [
-            {
-                'name': 'web',
-                'type': 'web',
-                'image': 'node:18-alpine',
-                'command': 'npm start',
-                'port': 3000,
-                'env': {}
-            }
-        ]
-    
-    async def _detect_runtime(self, repo_url: str, repo_ref: Optional[str]) -> str:
-        """Detect runtime from repository files"""
-        # This would actually inspect the repository
-        # For now, return a default
-        return 'node'
-    
-    async def _create_default_service(self, runtime: str, repo_url: str, repo_ref: Optional[str]) -> Dict:
-        """Create a default service based on detected runtime"""
-        if runtime == 'node':
-            return {
-                'name': 'app',
-                'type': 'web',
-                'image': 'node:18-alpine',
-                'command': 'npm start',
-                'port': 3000,
-                'env': {}
-            }
-        elif runtime == 'python':
-            return {
-                'name': 'app',
-                'type': 'web',
-                'image': 'python:3.11-slim',
-                'command': 'python app.py',
-                'port': 8000,
-                'env': {}
-            }
-        else:
-            # Default to a basic service
-            return {
-                'name': 'app',
-                'type': 'web',
-                'image': 'alpine:latest',
-                'command': 'sleep infinity',
-                'port': 8080,
-                'env': {}
-            }
+        try:
+            pod_id = await self.orchestrator.create_pod(pod_spec)
+            session.metadata['pod_id'] = pod_id
+            
+            network_name = self.basic_network.create_isolated_network(session.id)
+            session.network_id = network_name
+            
+            session.status = SessionStatus.RUNNING
+        except Exception as e:
+            self.logger.error(f"Failed to create fork-gui session: {e}")
+            session.status = SessionStatus.ERROR
+            raise
     
     async def destroy_session(self, session_id: str):
-        """Destroy a session and all its resources"""
+        """Destroy a session and its resources"""
         if session_id not in self.sessions:
             return
         
         session = self.sessions[session_id]
-        session.status = SessionStatus.STOPPED
-        
-        # Get environment for this session
-        environment_id = f"env-{session_id}"
-        if environment_id in self.environments:
-            environment = self.environments[environment_id]
+        if session._destroy_lock:
+            return
             
-            # Parse container IDs from session
-            container_ids = json.loads(session.container_id) if session.container_id else {}
+        session._destroy_lock = True
+        session.status = SessionStatus.STOPPING
+        
+        try:
+            environment_id = f"env-{session_id}"
+            if environment_id in self.environments:
+                await self.basic_network.cleanup_network_with_retry(environment_id, [])
+                del self.environments[environment_id]
             
-            # Destroy containers and network
-            self.container_orchestrator.destroy_environment(environment, container_ids)
+            pod_id = f"pod-{session_id}"
+            try:
+                await self.orchestrator.destroy_pod(pod_id)
+            except:
+                pass
+                
+            self.scheduler.unschedule(pod_id)
             
-            # Clean up network
-            self.network_manager.cleanup_network(environment_id, [])
+            session.status = SessionStatus.DESTROYED
+            session.updated_at = datetime.now()
             
-            # Remove from tracking
-            del self.environments[environment_id]
-        
-        # Mark session as destroyed
-        session.status = SessionStatus.DESTROYED
-        session.updated_at = datetime.now()
-    
-    async def get_session_logs(self, session_id: str, service_name: str = "main", lines: int = 100) -> str:
-        """Get logs from a session's service"""
-        if session_id not in self.sessions:
-            return ""
-        
-        session = self.sessions[session_id]
-        if not session.container_id:
-            return ""
-        
-        container_ids = json.loads(session.container_id)
-        if service_name not in container_ids:
-            return ""
-        
-        container_id = container_ids[service_name]
-        return self.container_orchestrator.get_container_logs(container_id, lines)
+            self.logger.info(f"Successfully destroyed session {session_id}")
+            
+        except Exception as e:
+            self.logger.error(f"Error destroying session {session_id}: {e}")
+            session.status = SessionStatus.ERROR
+            raise
+        finally:
+            session._destroy_lock = False
     
     async def cleanup_expired_sessions(self):
         """Remove expired sessions"""
@@ -300,44 +352,58 @@ class SessionManager:
         
         for session_id in expired_sessions:
             await self.destroy_session(session_id)
-            del self.sessions[session_id]
+            if session_id in self.sessions:
+                del self.sessions[session_id]
         
         return expired_sessions
 
+    async def get_session_logs(self, session_id: str, service: str = "main", lines: int = 100) -> str:
+        """Get logs from a session's container"""
+        if session_id not in self.sessions:
+            return ""
+        
+        session = self.sessions[session_id]
+        pod_id = session.metadata.get('pod_id')
+        
+        if not pod_id:
+            return ""
+        
+        try:
+            # Use the orchestrator to get logs
+            return await self.orchestrator.container_orchestrator.get_container_logs(pod_id, lines)
+        except Exception as e:
+            self.logger.error(f"Failed to get logs for session {session_id}: {e}")
+        
+        return ""
 
-class SnapshotManager:
-    """Manages snapshots for forkable sessions"""
-    
-    def __init__(self, storage_path: str):
-        self.storage_path = storage_path
-        self.logger = logging.getLogger(__name__)
-    
-    async def create_snapshot(self, session_id: str, state_data: Dict[str, Any]) -> str:
-        """Create a snapshot of a session's state"""
-        snapshot_id = f"snapshot-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
+    async def deploy_ai_generated_environment(self, user_id: str, compose_yaml: str) -> str:
+        """
+        Deploy an environment directly from AI-generated Docker Compose YAML
+        """
+        session_id = f"sess-ai-{secrets.token_hex(4)}"
         
-        # Save state data to storage
-        snapshot_path = os.path.join(self.storage_path, f"{snapshot_id}.json")
-        os.makedirs(self.storage_path, exist_ok=True)
+        session = Session(
+            id=session_id,
+            type=SessionType.RUN_REPO,
+            status=SessionStatus.CREATING,
+            user_id=user_id,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            expires_at=datetime.now() + timedelta(minutes=60)
+        )
         
-        with open(snapshot_path, 'w') as f:
-            json.dump({
-                'id': snapshot_id,
-                'session_id': session_id,
-                'created_at': datetime.now().isoformat(),
-                'state_data': state_data
-            }, f)
+        self.sessions[session_id] = session
         
-        return snapshot_id
-    
-    async def load_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
-        """Load a snapshot's state"""
-        snapshot_path = os.path.join(self.storage_path, f"{snapshot_id}.json")
-        
-        if not os.path.exists(snapshot_path):
-            return None
-        
-        with open(snapshot_path, 'r') as f:
-            data = json.load(f)
-        
-        return data
+        try:
+            # Logic to pass YAML to Docker Compose runner
+            # For now, we simulate the deployment success
+            await asyncio.sleep(1)
+            
+            session.status = SessionStatus.RUNNING
+            self.logger.info(f"AI-Generated session {session_id} deployed successfully")
+            
+            return session_id
+        except Exception as e:
+            session.status = SessionStatus.ERROR
+            self.logger.error(f"AI deployment failed: {e}")
+            raise

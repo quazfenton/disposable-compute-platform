@@ -7,7 +7,9 @@ import hmac
 import secrets
 import jwt
 import logging
+import json
 from typing import Dict, List, Optional, Any, Tuple
+
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 import subprocess
@@ -139,30 +141,57 @@ class VulnerabilityScanner:
     
     async def _scan_with_trivy(self, image_name: str, scan_id: str) -> SecurityScanResult:
         """Perform scan using Trivy"""
-        # This would be the actual implementation using Trivy
-        # For now, we'll simulate the scan
-        await asyncio.sleep(1)  # Simulate scan time
-        
-        # Return simulated results
-        return SecurityScanResult(
-            scan_id=scan_id,
-            target=image_name,
-            scan_type="vulnerability",
-            timestamp=datetime.now(),
-            status="completed",
-            vulnerabilities=[
-                {
-                    "id": "CVE-2023-1234",
-                    "title": "Sample Vulnerability",
-                    "severity": "MEDIUM",
-                    "package": "openssl",
-                    "version": "1.1.1",
-                    "description": "Sample vulnerability for demonstration"
-                }
-            ],
-            severity_summary={"MEDIUM": 1},
-            recommendations=["Update to latest version"]
-        )
+        try:
+            # Construct Trivy command
+            cmd = ["trivy", "image", "--format", "json", "--quiet", image_name]
+            
+            # Run the scan
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                raise Exception(f"Trivy scan failed: {stderr.decode()}")
+            
+            # Parse results
+            scan_data = json.loads(stdout.decode())
+            vulnerabilities = []
+            severity_summary = {}
+            
+            for report in scan_data.get("Results", []):
+                for vuln in report.get("Vulnerabilities", []):
+                    v_id = vuln.get("VulnerabilityID")
+                    severity = vuln.get("Severity", "UNKNOWN")
+                    
+                    vulnerabilities.append({
+                        "id": v_id,
+                        "title": vuln.get("Title"),
+                        "severity": severity,
+                        "package": vuln.get("PkgName"),
+                        "version": vuln.get("InstalledVersion"),
+                        "description": vuln.get("Description")
+                    })
+                    
+                    severity_summary[severity] = severity_summary.get(severity, 0) + 1
+            
+            return SecurityScanResult(
+                scan_id=scan_id,
+                target=image_name,
+                scan_type="vulnerability",
+                timestamp=datetime.now(),
+                status="completed",
+                vulnerabilities=vulnerabilities,
+                severity_summary=severity_summary,
+                recommendations=["Apply patches for high/critical vulnerabilities"] if severity_summary.get("CRITICAL") or severity_summary.get("HIGH") else []
+            )
+        except Exception as e:
+            self.logger.error(f"Trivy scan failed: {e}")
+            raise
+
 
 
 class RuntimeSecurityMonitor:
@@ -200,26 +229,34 @@ class RuntimeSecurityMonitor:
         """Monitor a single container for security issues"""
         while True:
             try:
-                # In a real implementation, this would check for:
-                # - Unexpected process execution
-                # - File system changes
-                # - Network connections
-                # - Privilege escalation attempts
-                # - etc.
+                # Actual runtime check: list running processes
+                # In a real setup, we'd use something like Falco or eBPF
+                # Here we'll use docker exec to check for suspicious processes
+                cmd = ["docker", "exec", container_id, "ps", "aux"]
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, _ = await proc.communicate()
                 
-                # For simulation, we'll just sleep and occasionally "detect" issues
-                await asyncio.sleep(30)  # Check every 30 seconds
+                if proc.returncode == 0:
+                    processes = stdout.decode().lower()
+                    suspicious_patterns = ["nc", "nmap", "cryptominer", "backdoor"]
+                    for pattern in suspicious_patterns:
+                        if pattern in processes:
+                            self.logger.warning(f"Suspicious process '{pattern}' detected in container {container_id}")
+                            # In production, this would trigger an alert or isolation
                 
-                # Simulate occasional security event detection
-                if secrets.randbelow(10) == 0:  # 10% chance of detecting an event
-                    self.logger.warning(f"Security event detected in container {container_id}")
+                await asyncio.sleep(60)  # Check every minute
                 
             except asyncio.CancelledError:
                 self.logger.info(f"Security monitoring cancelled for container {container_id}")
                 break
             except Exception as e:
                 self.logger.error(f"Error monitoring container {container_id}: {e}")
-                await asyncio.sleep(30)  # Wait before retrying
+                await asyncio.sleep(60)  # Wait before retrying
+
 
 
 class NetworkPolicyEnforcer:
@@ -279,7 +316,7 @@ class NetworkPolicyEnforcer:
 class CredentialManager:
     """Manages secure credential storage and access"""
     
-    def __init__(self, storage_path: str = "/tmp/dcp-credentials"):
+    def __init__(self, storage_path: str = "/var/lib/dcp-credentials"):
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(__name__)
@@ -287,19 +324,23 @@ class CredentialManager:
     def store_credential(self, key: str, value: str, ttl_minutes: int = 60) -> str:
         """Store a credential securely"""
         try:
-            # Create a secure file with restricted permissions
-            cred_file = self.storage_path / f"{key}.cred"
-            
-            # Write the credential
-            with open(cred_file, 'w') as f:
+            # Sanitize the key to prevent path traversal
+            sanitized_key = Path(key).name  # Only use the filename part, discard any path components
+            cred_file = self.storage_path / f"{sanitized_key}.cred"
+
+            # Write the credential with restrictive permissions from the start to avoid race condition
+            fd = os.open(cred_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w') as f:
                 f.write(value)
-            
-            # Set restrictive permissions (owner read/write only)
-            os.chmod(cred_file, 0o600)
-            
+
             # Schedule cleanup
-            asyncio.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
-            
+            # Store task reference to prevent GC and allow exception propagation
+            if not hasattr(self, '_cleanup_tasks'):
+                self._cleanup_tasks = set()
+            task = asyncio.create_task(self._schedule_cleanup(str(cred_file), ttl_minutes))
+            task.add_done_callback(self._cleanup_tasks.discard)
+            self._cleanup_tasks.add(task)
+
             self.logger.info(f"Stored credential for key: {key}")
             return str(cred_file)
         except Exception as e:
@@ -309,11 +350,13 @@ class CredentialManager:
     def retrieve_credential(self, key: str) -> Optional[str]:
         """Retrieve a credential"""
         try:
-            cred_file = self.storage_path / f"{key}.cred"
-            
+            # Sanitize the key to prevent path traversal
+            sanitized_key = Path(key).name  # Only use the filename part, discard any path components
+            cred_file = self.storage_path / f"{sanitized_key}.cred"
+
             if not cred_file.exists():
                 return None
-            
+
             with open(cred_file, 'r') as f:
                 return f.read().strip()
         except Exception as e:
@@ -323,12 +366,14 @@ class CredentialManager:
     def delete_credential(self, key: str) -> bool:
         """Delete a credential"""
         try:
-            cred_file = self.storage_path / f"{key}.cred"
-            
+            # Sanitize the key to prevent path traversal
+            sanitized_key = Path(key).name  # Only use the filename part, discard any path components
+            cred_file = self.storage_path / f"{sanitized_key}.cred"
+
             if cred_file.exists():
                 cred_file.unlink()
                 self.logger.info(f"Deleted credential for key: {key}")
-            
+
             return True
         except Exception as e:
             self.logger.error(f"Failed to delete credential for key {key}: {e}")

@@ -1,23 +1,25 @@
 """
 Session model for managing disposable compute environments
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import uuid
 
 
-class SessionType(Enum):
+class SessionType(str, Enum):
     PREVIEW = "preview"
     RUN_REPO = "run_repo"
     FORK_GUI = "fork_gui"
 
 
-class SessionStatus(Enum):
+class SessionStatus(str, Enum):
     CREATING = "creating"
     RUNNING = "running"
+    STOPPING = "stopping"
     STOPPED = "stopped"
+    FAILED = "failed"
     DESTROYED = "destroyed"
     ERROR = "error"
 
@@ -30,6 +32,7 @@ class Session:
     status: SessionStatus
     created_at: datetime
     updated_at: datetime
+    user_id: str = "default"
     expires_at: Optional[datetime] = None
     
     # Repository information
@@ -40,16 +43,13 @@ class Session:
     # Container information
     container_id: Optional[str] = None
     network_id: Optional[str] = None
-    ports: Dict[str, int] = None
+    ports: Dict[str, int] = field(default_factory=dict)
     
     # Metadata
-    metadata: Dict[str, str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
-    def __post_init__(self):
-        if self.ports is None:
-            self.ports = {}
-        if self.metadata is None:
-            self.metadata = {}
+    # Lifecycle control
+    _destroy_lock: bool = False
 
 
 @dataclass
@@ -60,14 +60,8 @@ class ServiceDefinition:
     image: str
     command: Optional[str] = None
     port: Optional[int] = None
-    env: Dict[str, str] = None
-    volumes: List[str] = None
-    
-    def __post_init__(self):
-        if self.env is None:
-            self.env = {}
-        if self.volumes is None:
-            self.volumes = []
+    env: Dict[str, str] = field(default_factory=dict)
+    volumes: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -77,11 +71,5 @@ class Snapshot:
     session_id: str
     created_at: datetime
     parent_snapshot_id: Optional[str] = None
-    state_data: Dict[str, Any] = None
-    metadata: Dict[str, str] = None
-    
-    def __post_init__(self):
-        if self.state_data is None:
-            self.state_data = {}
-        if self.metadata is None:
-            self.metadata = {}
+    state_data: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, str] = field(default_factory=dict)

@@ -91,18 +91,19 @@ class MonitoringService:
     async def _update_system_metrics(self):
         """Update system resource metrics"""
         try:
-            # CPU usage
-            cpu_percent = psutil.cpu_percent(interval=1)
+            # CPU usage - run blocking call in thread pool
+            loop = asyncio.get_event_loop()
+            cpu_percent = await loop.run_in_executor(None, lambda: psutil.cpu_percent(interval=1))
             cpu_usage.set(cpu_percent)
-            
+
             # Memory usage
             memory = psutil.virtual_memory()
             memory_usage.set(memory.percent)
-            
+
             # Disk usage
             disk = psutil.disk_usage('/')
             disk_usage.set(disk.percent)
-            
+
         except Exception as e:
             logging.error(f"Error updating system metrics: {e}")
     
@@ -158,25 +159,26 @@ class MonitoringService:
     def record_pod_terminated(self):
         """Record a pod termination"""
         pods_terminated.inc()
-    
+
     async def get_health_status(self) -> Dict[str, Any]:
         """Get overall health status of the platform"""
         try:
-            # System health
-            cpu_percent = psutil.cpu_percent(interval=1)
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
-            
+            # System health - run blocking calls in thread pool
+            loop = asyncio.get_event_loop()
+            cpu_percent = await loop.run_in_executor(None, lambda: psutil.cpu_percent(interval=1))
+            memory = await loop.run_in_executor(None, psutil.virtual_memory)
+            disk = await loop.run_in_executor(None, psutil.disk_usage, '/')
+
             # Service health
             orchestrator_healthy = True  # Placeholder
             scheduler_healthy = True  # Placeholder
             storage_healthy = True  # Placeholder
-            
+
             # Pod health
             total_pods = len(self.orchestrator.pods)
-            active_pods = len([p for p in self.orchestrator.pods.values() 
-                              if p.status.value in ['STARTING', 'STREAMING']])
-            
+            active_pods = len([p for p in self.orchestrator.pods.values()
+                              if p.status.value in ['starting', 'running']])
+
             health_status = {
                 "timestamp": datetime.now().isoformat(),
                 "system": {
@@ -198,9 +200,9 @@ class MonitoringService:
                 },
                 "overall_healthy": True  # Placeholder
             }
-            
+
             return health_status
-            
+
         except Exception as e:
             logging.error(f"Error getting health status: {e}")
             return {

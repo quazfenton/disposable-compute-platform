@@ -306,8 +306,14 @@ class HealthChecker:
         for name, check_func in self.checks.items():
             try:
                 result = await check_func() if asyncio.iscoroutinefunction(check_func) else check_func()
-                status = "healthy" if result else "unhealthy"
-                details = result if isinstance(result, dict) else {}
+                
+                # Check the status field if result is a dict with status, otherwise use truthiness
+                if isinstance(result, dict) and 'status' in result:
+                    status = result['status']
+                    details = result
+                else:
+                    status = "healthy" if result else "unhealthy"
+                    details = result if isinstance(result, dict) else {}
             except Exception as e:
                 status = "error"
                 details = {"error": str(e)}
@@ -321,7 +327,7 @@ class HealthChecker:
         
         return results
     
-    async def check_system_health(self) -> bool:
+    async def check_system_health(self) -> Dict[str, Any]:
         """Check overall system health"""
         try:
             # Check CPU usage
@@ -344,7 +350,7 @@ class HealthChecker:
             self.logger.error(f"Error checking system health: {e}")
             return {"status": "error", "error": str(e)}
     
-    async def check_docker_health(self) -> bool:
+    async def check_docker_health(self) -> Dict[str, Any]:
         """Check Docker daemon health"""
         try:
             import docker
@@ -355,7 +361,7 @@ class HealthChecker:
             self.logger.error(f"Error checking Docker health: {e}")
             return {"status": "error", "error": str(e)}
     
-    async def check_libvirt_health(self) -> bool:
+    async def check_libvirt_health(self) -> Dict[str, Any]:
         """Check libvirt daemon health"""
         try:
             import libvirt

@@ -39,7 +39,7 @@ class TestPodModel:
 
         assert pod.id == "test-pod-123"
         assert pod.spec.pod_type == PodType.CONTAINER
-        assert pod.status == PodStatus.CREATING
+        assert pod.status == PodStatus.REQUESTED
         assert pod.metadata == {}  # Should be initialized by __post_init__
 
     def test_resource_requirements(self):

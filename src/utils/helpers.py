@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 import psutil
 import os
+import pathlib
 import subprocess
 from .config import settings
 
@@ -86,94 +87,50 @@ def get_cpu_temperature() -> float:
         return 45.0
 
 
-def run_command(cmd: List[str], timeout: int = 30) -> Optional[str]:
-    """Run a shell command and return output"""
+async def run_command(cmd: List[str], timeout: int = 30) -> Optional[str]:
+    """Run a shell command asynchronously and return output"""
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout
+        # Use asyncio.create_subprocess_exec for non-blocking execution
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        else:
-            logging.error(f"Command failed: {' '.join(cmd)}, error: {result.stderr}")
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            
+            if proc.returncode == 0:
+                return stdout.decode().strip()
+            else:
+                logging.error(f"Command failed: {' '.join(cmd)}, error: {stderr.decode()}")
+                return None
+        except asyncio.TimeoutError:
+            proc.kill()
+            logging.error(f"Command timed out: {' '.join(cmd)}")
             return None
-    except subprocess.TimeoutExpired:
-        logging.error(f"Command timed out: {' '.join(cmd)}")
-        return None
+            
     except Exception as e:
         logging.error(f"Command execution error: {e}")
         return None
 
 
-def validate_gpu_availability(gpu_type: str, required_vram: int) -> bool:
-    """Validate if GPU with required VRAM is available"""
-    # This is a simplified implementation
-    # In a real system, you would query actual GPU resources
-    if gpu_type and required_vram > 0:
-        # Mock validation - assume GPU is available
-        return True
-    return True
-
-
-def is_os_compatible(node_os: str, app_type: str) -> bool:
-    """Check if node OS is compatible with requested app type"""
-    if app_type == "windows":
-        # Windows apps can run on Linux with QEMU
-        return True
-    elif app_type == "linux":
-        # Linux apps can run on Linux with containers or VMs
-        return node_os.lower().startswith("linux")
-    elif app_type == "macos":
-        # macOS apps require macOS or specialized setup
-        return node_os.lower().startswith("darwin") or node_os.lower().startswith("mac")
-    return True
-
-
-def is_gpu_compatible(gpu_type: Optional[str], app_name: str) -> bool:
-    """Check if GPU type is compatible with app"""
-    if not gpu_type:
-        return True
-    
-    # For GPU-intensive apps like UE5/TouchDesigner, any modern GPU should work
-    if app_name.lower() in ["ue5", "unreal engine 5", "touchdesigner"]:
-        return True
-    
-    return True
-
-
-def create_directory_if_not_exists(path: str) -> bool:
-    """Create directory if it doesn't exist"""
+async def get_gpu_info() -> Dict[str, Any]:
+    """Get information about available GPUs asynchronously"""
     try:
-        os.makedirs(path, exist_ok=True)
-        return True
-    except Exception as e:
-        logging.error(f"Failed to create directory {path}: {e}")
-        return False
+        # Check if nvidia-smi is available
+        which_result = await run_command(['which', 'nvidia-smi'])
+        if not which_result:
+            return {"gpus": [], "driver_version": "No GPU"}
 
-
-def format_bytes_to_gb(bytes_value: float) -> float:
-    """Convert bytes to gigabytes"""
-    return bytes_value / (1024**3)
-
-
-def get_gpu_info() -> Dict[str, Any]:
-    """Get information about available GPUs"""
-    # This is a simplified implementation
-    # In a real system, you would query nvidia-smi or similar
-    try:
         # Try to get NVIDIA GPU info
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total,memory.used", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True
+        output = await run_command(
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.used", "--format=csv,noheader,nounits"]
         )
         
-        if result.returncode == 0:
+        if output:
             gpus = []
-            for line in result.stdout.strip().split('\n'):
+            for line in output.strip().split('\n'):
                 if line:
                     parts = [part.strip() for part in line.split(',')]
                     if len(parts) >= 3:
@@ -184,23 +141,26 @@ def get_gpu_info() -> Dict[str, Any]:
                         })
             return {"gpus": gpus, "driver_version": "NVIDIA Driver"}
         else:
-            # No NVIDIA GPU found, return empty info
             return {"gpus": [], "driver_version": "No GPU"}
-    except FileNotFoundError:
-        # nvidia-smi not found
-        return {"gpus": [], "driver_version": "No GPU"}
     except Exception as e:
         logging.error(f"Error getting GPU info: {e}")
         return {"gpus": [], "driver_version": "Error"}
 
 
+
 def cleanup_temporary_files(pod_id: str):
     """Clean up temporary files associated with a pod"""
+    # Sanitize the pod_id to prevent path traversal
+    safe_pod_id = pathlib.Path(pod_id).name
+    if not safe_pod_id:
+        logging.error(f"Invalid pod_id provided for cleanup: {pod_id!r}")
+        return
+
     temp_dirs = [
-        f"{settings.storage_base_path}/temp/{pod_id}",
-        f"/tmp/disposable_compute_{pod_id}"
+        f"{settings.storage_base_path}/temp/{safe_pod_id}",
+        f"/tmp/disposable_compute_{safe_pod_id}"
     ]
-    
+
     for temp_dir in temp_dirs:
         try:
             if os.path.exists(temp_dir):

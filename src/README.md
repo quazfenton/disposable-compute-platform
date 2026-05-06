@@ -1,6 +1,7 @@
-# Source Code Structure
+# Vanish Compute (VNC) - Core Logic
 
-This directory contains the source code for the Disposable Compute Platform.
+This directory contains the source code for Vanish Compute.
+
 
 ## Directory Structure
 

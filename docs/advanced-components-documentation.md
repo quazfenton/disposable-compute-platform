@@ -22,7 +22,8 @@ The Pod model represents a disposable compute unit that can be either a containe
 
 ### Usage Example
 ```python
-from src.models.pod import Pod, PodSpec, PodType, ResourceRequirements, GPUResource, GPUType
+from src.models.pod import Pod, PodSpec, PodStatus, PodType, ResourceRequirements, GPUResource, GPUType
+from datetime import datetime
 
 # Create a pod specification
 pod_spec = PodSpec(

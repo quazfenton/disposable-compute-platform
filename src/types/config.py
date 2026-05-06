@@ -51,7 +51,6 @@ class Settings(BaseSettings):
     scheduler_max_attempts: int = 5
     
     # Security Settings
-    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
     
@@ -61,6 +60,16 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
+
+    @property
+    def jwt_secret_key(self) -> str:
+        # Validate JWT secret key
+        if not hasattr(self, '_jwt_secret_key'):
+            secret = os.getenv("JWT_SECRET_KEY")
+            if not secret:
+                raise ValueError("JWT_SECRET_KEY environment variable must be set")
+            self._jwt_secret_key = secret
+        return self._jwt_secret_key
 
 
 settings = Settings()

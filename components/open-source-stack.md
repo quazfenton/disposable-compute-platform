@@ -9,7 +9,7 @@
 
 ### Virtualization
 - **QEMU/KVM** - Primary virtualization for Linux and Windows VMs
-- **Firecracker** - MicroVMs for lightweight Linux workloads (serverless, functions)
+- **Firecracker** - MicroVMs for lightweight Linux and OSv workloads (serverless, functions) - NOTE: Does not support Windows or macOS VMs
 - **libvirt** - VM management layer
 - **VFIO** - GPU passthrough for hardware acceleration
 

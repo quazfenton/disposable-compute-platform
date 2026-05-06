@@ -7,12 +7,9 @@ from dataclasses import dataclass
 from datetime import datetime
 import cv2
 import numpy as np
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, RTCConfiguration, RTCIceServer
 from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder
-
-from ..types.config import settings
 from ..networking.network_manager import NetworkManager
-
 
 @dataclass
 class StreamSession:
@@ -25,6 +22,29 @@ class StreamSession:
     audio_track: Optional[Any] = None
 
 
+class SFUServer:
+    """Selective Forwarding Unit implementation for multi-client streaming"""
+    
+    def __init__(self):
+        self.peer_connections = set()
+        self.video_tracks = set()
+        self.logger = logging.getLogger(__name__)
+
+    def add_peer(self, pc: RTCPeerConnection):
+        self.peer_connections.add(pc)
+        self.logger.info(f"SFU: Added peer connection. Total: {len(self.peer_connections)}")
+
+    def remove_peer(self, pc: RTCPeerConnection):
+        self.peer_connections.discard(pc)
+        self.logger.info(f"SFU: Removed peer connection. Total: {len(self.peer_connections)}")
+
+    def broadcast_track(self, track: VideoStreamTrack):
+        self.video_tracks.add(track)
+        for pc in self.peer_connections:
+            if pc.connectionState == "connected":
+                pc.addTrack(track)
+
+
 class StreamingAgent:
     """Streaming agent for WebRTC-based desktop application streaming"""
     
@@ -32,9 +52,21 @@ class StreamingAgent:
         self.pod_id = pod_id
         self.network_manager = network_manager
         self.sessions: Dict[str, StreamSession] = {}
+        self.sfu = SFUServer()
         self.running = False
         self.video_capture = None
         self.input_queue = asyncio.Queue()
+        self.logger = logging.getLogger(__name__)
+        
+        # ICE configuration
+        self.rtc_config = RTCConfiguration(
+            iceServers=[
+                RTCIceServer(urls="stun:stun.l.google.com:19302"),
+                # In production, add TURN servers:
+                # RTCIceServer(urls="turn:your-turn-server.com", username="...", credential="...")
+            ]
+        )
+
         
         # Initialize video capture for the pod
         # In a real implementation, this would capture from the pod's display
@@ -81,13 +113,44 @@ class StreamingAgent:
         except Exception as e:
             logging.error(f"Error stopping streaming server: {e}")
     
+    async def handle_ice_candidate(self, session_id: str, candidate_data: Dict[str, Any]):
+        """Handle an ICE candidate from the client (Trickle ICE)"""
+        if session_id not in self.sessions:
+            return
+            
+        session = self.sessions[session_id]
+        pc = session.connection
+        
+        from aiortc import RTCIceCandidate
+        
+        # Parse candidate
+        try:
+            candidate = RTCIceCandidate(
+                component=candidate_data.get('component'),
+                foundation=candidate_data.get('foundation'),
+                ip=candidate_data.get('ip'),
+                port=candidate_data.get('port'),
+                priority=candidate_data.get('priority'),
+                protocol=candidate_data.get('protocol'),
+                type=candidate_data.get('type'),
+                sdpMid=candidate_data.get('sdpMid'),
+                sdpMLineIndex=candidate_data.get('sdpMLineIndex')
+            )
+            await pc.addIceCandidate(candidate)
+            self.logger.debug(f"Added ICE candidate for session {session_id}")
+        except Exception as e:
+            self.logger.error(f"Failed to add ICE candidate: {e}")
+
     async def create_session(self, client_ip: str) -> Optional[str]:
-        """Create a new streaming session"""
+        """Create a new streaming session with SFU and Trickle ICE support"""
         try:
             session_id = f"session-{self.pod_id}-{int(datetime.now().timestamp())}"
             
-            # Create WebRTC peer connection
-            pc = RTCPeerConnection()
+            # Create WebRTC peer connection with ICE servers
+            pc = RTCPeerConnection(self.rtc_config)
+            
+            # Register with SFU
+            self.sfu.add_peer(pc)
             
             # Create session object
             session = StreamSession(
@@ -101,18 +164,32 @@ class StreamingAgent:
             self.sessions[session_id] = session
             
             # Set up event handlers
+            @pc.on("icecandidate")
+            async def on_icecandidate(candidate):
+                """Signal local ICE candidate to client (Trickle ICE)"""
+                if candidate:
+                    # In a real implementation, you'd send this via WebSocket
+                    self.logger.debug(f"Local ICE candidate: {candidate}")
+                    # self.signal_to_client(session_id, {"type": "candidate", "candidate": candidate})
+
             @pc.on("iceconnectionstatechange")
             async def on_iceconnectionstatechange():
                 logging.info(f"ICE connection state for session {session_id}: {pc.iceConnectionState}")
                 if pc.iceConnectionState == "failed":
+                    self.sfu.remove_peer(pc)
                     await self.close_session(session_id)
             
+            @pc.on("connectionstatechange")
+            async def on_connectionstatechange():
+                if pc.connectionState in ["closed", "failed"]:
+                    self.sfu.remove_peer(pc)
+
             logging.info(f"Created streaming session {session_id} for pod {self.pod_id}")
             return session_id
-            
         except Exception as e:
-            logging.error(f"Error creating streaming session: {e}")
+            self.logger.error(f"Failed to create streaming session: {e}")
             return None
+
     
     async def close_session(self, session_id: str):
         """Close a streaming session"""

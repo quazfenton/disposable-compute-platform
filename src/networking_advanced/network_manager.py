@@ -3,7 +3,9 @@ Advanced networking module for disposable compute platform
 """
 import asyncio
 import socket
+import hashlib
 from typing import Dict, List, Optional, Any, Tuple
+
 from dataclasses import dataclass
 import logging
 import subprocess
@@ -114,13 +116,14 @@ class NetworkPolicyManager:
 
 
 class LoadBalancer:
-    """Manages load balancing for services"""
+    """Manages load balancing for services with connection tracking"""
     
     def __init__(self):
         self.backends: Dict[str, List[Dict[str, Any]]] = {}  # service_id -> list of backends
         self.configs: Dict[str, LoadBalancerConfig] = {}
         self.health_status: Dict[str, Dict[str, bool]] = {}  # service_id -> backend_id -> status
         self.current_backend_index: Dict[str, int] = {}  # For round-robin
+        self.connection_counts: Dict[str, int] = {}  # backend_id -> current_connections
         self.logger = logging.getLogger(__name__)
     
     def add_backend(self, service_id: str, backend: Dict[str, Any]):
@@ -132,6 +135,7 @@ class LoadBalancer:
         
         self.backends[service_id].append(backend)
         self.health_status[service_id][backend['id']] = True  # Initially healthy
+        self.connection_counts[backend['id']] = 0
         self.logger.info(f"Added backend {backend['id']} to service {service_id}")
     
     def remove_backend(self, service_id: str, backend_id: str):
@@ -143,6 +147,8 @@ class LoadBalancer:
             ]
             if backend_id in self.health_status[service_id]:
                 del self.health_status[service_id][backend_id]
+            if backend_id in self.connection_counts:
+                del self.connection_counts[backend_id]
             self.logger.info(f"Removed backend {backend_id} from service {service_id}")
     
     def set_config(self, service_id: str, config: LoadBalancerConfig):
@@ -150,7 +156,7 @@ class LoadBalancer:
         self.configs[service_id] = config
         self.logger.info(f"Set load balancer config for service {service_id}")
     
-    async def get_backend(self, service_id: str) -> Optional[Dict[str, Any]]:
+    async def get_backend(self, service_id: str, client_ip: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get the next backend for a request based on the algorithm"""
         if service_id not in self.backends or not self.backends[service_id]:
             return None
@@ -178,30 +184,45 @@ class LoadBalancer:
         if config.algorithm == "round-robin":
             backend = self._round_robin_select(service_id, healthy_backends)
         elif config.algorithm == "least-connections":
-            backend = self._least_connections_select(service_id, healthy_backends)
+            backend = self._least_connections_select(healthy_backends)
         elif config.algorithm == "ip-hash":
-            # For demo purposes, we'll just use round-robin
-            backend = self._round_robin_select(service_id, healthy_backends)
+            backend = self._ip_hash_select(healthy_backends, client_ip or "0.0.0.0")
         else:
             backend = healthy_backends[0]  # Default to first
         
+        # Update connection count
+        if backend:
+            self.connection_counts[backend['id']] += 1
+            
         return backend
     
     def _round_robin_select(self, service_id: str, backends: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Select backend using round-robin algorithm"""
-        if not backends:
-            return None
-        
         index = self.current_backend_index[service_id]
         backend = backends[index % len(backends)]
         self.current_backend_index[service_id] = (index + 1) % len(backends)
         return backend
     
-    def _least_connections_select(self, service_id: str, backends: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Select backend with least connections (simplified)"""
-        # For demo purposes, we'll just return the first backend
-        # In a real implementation, this would track connection counts
-        return backends[0] if backends else None
+    def _least_connections_select(self, backends: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Select backend with the fewest active connections"""
+        # Sort backends by connection count
+        sorted_backends = sorted(
+            backends, 
+            key=lambda b: self.connection_counts.get(b['id'], 0)
+        )
+        return sorted_backends[0]
+
+    def _ip_hash_select(self, backends: List[Dict[str, Any]], client_ip: str) -> Dict[str, Any]:
+        """Select backend based on client IP hash for session persistence"""
+        ip_hash = int(hashlib.md5(client_ip.encode()).hexdigest(), 16)
+        index = ip_hash % len(backends)
+        return backends[index]
+
+    def release_backend(self, backend_id: str):
+        """Decrement connection count when a request finishes"""
+        if backend_id in self.connection_counts:
+            self.connection_counts[backend_id] = max(0, self.connection_counts[backend_id] - 1)
+
     
     async def start_health_checks(self, service_id: str):
         """Start health checks for a service"""
@@ -248,14 +269,18 @@ class LoadBalancer:
             # In a real implementation, this would make an HTTP request to the health check path
             host = backend.get('host', 'localhost')
             port = backend.get('port', 80)
-            
-            # Check if port is open
-            with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-                sock.settimeout(5)  # 5 second timeout
-                result = sock.connect_ex((host, port))
-                return result == 0
+            # Check if port is open using a thread executor to avoid blocking the event loop
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, self._sync_check_port, host, port)
+            return result == 0
         except Exception:
             return False
+
+    def _sync_check_port(self, host: str, port: int) -> int:
+        """Synchronous function to check if a port is open"""
+        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            sock.settimeout(5)  # 5 second timeout
+            return sock.connect_ex((host, port))
 
 
 class ServiceMeshManager:
@@ -322,8 +347,9 @@ class CDNManager:
             # For now, we'll just log the configuration
             self.logger.info(f"CDN enabled for {service_id} with provider {config.provider}")
     
-    def invalidate_cache(self, service_id: str, paths: List[str] = None):
+    def invalidate_cache(self, service_id: str, paths: Optional[List[str]] = None):
         """Invalidate CDN cache for specific paths or all"""
+
         if service_id not in self.cdn_configs:
             self.logger.warning(f"No CDN config for service {service_id}")
             return
@@ -392,9 +418,10 @@ class AdvancedNetworkManager:
         """Configure CDN for a service"""
         self.cdn_manager.configure_cdn(service_id, config)
     
-    def invalidate_cdn_cache(self, service_id: str, paths: List[str] = None):
+    def invalidate_cdn_cache(self, service_id: str, paths: Optional[List[str]] = None):
         """Invalidate CDN cache"""
         self.cdn_manager.invalidate_cache(service_id, paths)
+
     
     def create_network_policy(self, policy: NetworkPolicy) -> bool:
         """Create a network policy"""

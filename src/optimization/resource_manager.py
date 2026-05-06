@@ -161,24 +161,43 @@ class QuotaManager:
         
         return len(violations) == 0, violations
     
+    def _validate_resources(self, resources: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """Validate resource request to prevent negative values or invalid types"""
+        keys = ("cpu_cores", "memory_mb", "storage_gb", "gpu_count")
+        errors: List[str] = []
+        for k in keys:
+            v = resources.get(k, 0)
+            if not isinstance(v, (int, float)):
+                errors.append(f"{k} must be numeric")
+                continue
+            if v < 0:
+                errors.append(f"{k} must be >= 0")
+        return (len(errors) == 0), errors
+
     def allocate_resources(self, user_id: str, resources: Dict[str, Any]) -> bool:
         """Allocate resources to a user's quota"""
         quota = self.quotas.get(user_id)
         if not quota:
             return True  # No quota to enforce
-        
+
+        # Validate resources to prevent negative values or invalid types
+        ok, errors = self._validate_resources(resources)
+        if not ok:
+            self.logger.warning(f"Invalid resource request for {user_id}: {errors}")
+            return False
+
         # Check if allocation would exceed quota
         can_allocate, violations = self.check_quota(user_id, resources)
         if not can_allocate:
             self.logger.warning(f"Resource allocation denied for {user_id}: {violations}")
             return False
-        
+
         # Update used resources
         quota.used_cpu_cores += resources.get('cpu_cores', 0)
         quota.used_memory_mb += resources.get('memory_mb', 0)
         quota.used_storage_gb += resources.get('storage_gb', 0)
         quota.used_gpus += resources.get('gpu_count', 0)
-        
+
         self.logger.info(f"Allocated resources for user {user_id}: {resources}")
         return True
     
@@ -205,13 +224,14 @@ class AutoScaler:
         self.scaling_policies = {}
         self.logger = logging.getLogger(__name__)
     
-    def set_scaling_policy(self, pod_id: str, min_resources: Dict[str, Any], 
+    def set_scaling_policy(self, pod_id: str, min_resources: Dict[str, Any],
                           max_resources: Dict[str, Any], target_utilization: float = 0.7):
         """Set scaling policy for a pod"""
         self.scaling_policies[pod_id] = {
             'min_resources': min_resources,
             'max_resources': max_resources,
-            'target_utilization': target_utilization
+            'target_utilization': target_utilization,
+            'current_resources': dict(min_resources)  # Start at min
         }
         self.logger.info(f"Set scaling policy for pod {pod_id}")
     
@@ -219,32 +239,59 @@ class AutoScaler:
         """Evaluate if scaling is needed for a pod"""
         if pod_id not in self.scaling_policies:
             return None
-        
+
         policy = self.scaling_policies[pod_id]
-        
+
         # Get predicted usage
         prediction = self.resource_predictor.predict_usage(pod_id)
         if not prediction:
             return None
-        
+
         # Calculate if scaling is needed
         cpu_utilization = current_usage.get('cpu_percent', 0) / 100.0
         memory_utilization = current_usage.get('memory_used_mb', 0) / max(current_usage.get('memory_total_mb', 1), 1)
-        
+
         # Use the higher of CPU or memory utilization for scaling decision
         current_utilization = max(cpu_utilization, memory_utilization)
-        
+
         # Calculate scaling factor
         if current_utilization > policy['target_utilization'] * 1.2:  # Scale up if utilization is 20% above target
-            # Scale up
+            # Scale up - calculate target resources based on current resources
             scale_factor = min(1.5, current_utilization / policy['target_utilization'])  # Max 1.5x scale up
-            return self._calculate_scaled_resources(policy['max_resources'], scale_factor)
+            # Use current resources as base for scaling, then clamp to policy limits
+            target_resources = self._calculate_scaled_resources(self._get_current_resources(pod_id), scale_factor)
+            clamped_resources = self._clamp_resources(target_resources, policy['min_resources'], policy['max_resources'])
+            # Update current resources to the new scaled values
+            policy['current_resources'] = clamped_resources
+            return clamped_resources
         elif current_utilization < policy['target_utilization'] * 0.8:  # Scale down if utilization is 20% below target
-            # Scale down
+            # Scale down - calculate target resources based on current resources
             scale_factor = max(0.5, current_utilization / policy['target_utilization'])  # Min 0.5x scale down
-            return self._calculate_scaled_resources(policy['min_resources'], scale_factor)
-        
+            target_resources = self._calculate_scaled_resources(self._get_current_resources(pod_id), scale_factor)
+            clamped_resources = self._clamp_resources(target_resources, policy['min_resources'], policy['max_resources'])
+            # Update current resources to the new scaled values
+            policy['current_resources'] = clamped_resources
+            return clamped_resources
+
         return None  # No scaling needed
+
+    def _get_current_resources(self, pod_id: str) -> Dict[str, Any]:
+        """Get current resources for a pod"""
+        policy = self.scaling_policies.get(pod_id)
+        if policy and 'current_resources' in policy:
+            return dict(policy['current_resources'])
+        return dict(policy['min_resources']) if policy else {}
+
+    def _clamp_resources(self, resources: Dict[str, Any], min_resources: Dict[str, Any], max_resources: Dict[str, Any]) -> Dict[str, Any]:
+        """Clamp resources between min and max values"""
+        clamped = {}
+        for key in set(resources.keys()) | set(min_resources.keys()) | set(max_resources.keys()):
+            value = resources.get(key, 0)
+            min_val = min_resources.get(key, 0)
+            max_val = max_resources.get(key, float('inf'))
+
+            clamped[key] = max(min_val, min(value, max_val))
+        return clamped
     
     def _calculate_scaled_resources(self, base_resources: Dict[str, Any], scale_factor: float) -> Dict[str, Any]:
         """Calculate scaled resources based on a scale factor"""

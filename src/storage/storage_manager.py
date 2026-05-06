@@ -398,10 +398,13 @@ class StorageManager:
     """Main storage manager that coordinates all storage operations"""
     
     def __init__(self, base_storage_path: str = "/var/lib/disposable-storage"):
+        # Initialize sub-managers directly (synchronous initialization)
         self.volume_manager = VolumeManager(base_storage_path)
         self.snapshot_manager = SnapshotManager(self.volume_manager)
         self.backup_manager = BackupManager(self.volume_manager, self.snapshot_manager)
         self.logger = logging.getLogger(__name__)
+        # Store base path for later use
+        self.base_storage_path = base_storage_path
     
     async def initialize(self):
         """Initialize the storage manager"""

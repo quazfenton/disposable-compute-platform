@@ -13,7 +13,8 @@ from src.streaming.streaming_server import StreamingManager
 from src.monitoring.monitoring_manager import MonitoringManager, ResourceMonitor, HealthChecker
 from src.utils.security_enhanced import SecurityManager, VulnerabilityScanner
 from src.optimization.resource_manager import ResourceManager, ResourcePredictor, QuotaManager
-from src.networking_advanced.network_manager import AdvancedNetworkManager, LoadBalancer, NetworkPolicyManager
+from src.networking_advanced.network_manager import AdvancedNetworkManager, LoadBalancer, NetworkPolicyManager, NetworkPolicy, LoadBalancerConfig, ServiceMeshManager, ServiceMeshConfig
+from src.optimization.resource_manager import AutoScaler
 
 
 class TestMonitoringManager:
@@ -196,7 +197,7 @@ class TestResourceManager:
     async def test_auto_scaling_evaluation(self):
         """Test auto scaling evaluation"""
         predictor = ResourcePredictor()
-        auto_scaler = src.optimization.resource_manager.AutoScaler(predictor)
+        auto_scaler = AutoScaler(predictor)
         
         # Set a scaling policy
         min_resources = {"cpu_cores": 1.0, "memory_mb": 512}
@@ -220,7 +221,7 @@ class TestAdvancedNetworkManager:
         policy_manager = NetworkPolicyManager()
         
         # Create a network policy
-        policy = src.networking_advanced.network_manager.NetworkPolicy(
+        policy = NetworkPolicy(
             id="test-policy",
             name="Test Policy",
             description="Test network policy",
@@ -256,7 +257,7 @@ class TestAdvancedNetworkManager:
         lb.add_backend("test-service", backend2)
         
         # Configure load balancer
-        config = src.networking_advanced.network_manager.LoadBalancerConfig(
+        config = LoadBalancerConfig(
             algorithm="round-robin",
             health_check_path="/health",
             health_check_interval=30,
@@ -279,10 +280,10 @@ class TestAdvancedNetworkManager:
 
     def test_service_mesh_configuration(self):
         """Test service mesh configuration"""
-        mesh_manager = src.networking_advanced.network_manager.ServiceMeshManager()
+        mesh_manager = ServiceMeshManager()
         
         # Configure service mesh
-        config = src.networking_advanced.network_manager.ServiceMeshConfig(
+        config = ServiceMeshConfig(
             enable_mtls=True,
             enable_tracing=True,
             enable_circuit_breaker=True,
@@ -335,7 +336,7 @@ class TestIntegration:
         resource_manager.record_resource_usage("test-pod-integration", usage_data)
         
         # Apply network policy
-        network_policy = src.networking_advanced.network_manager.NetworkPolicy(
+        network_policy = NetworkPolicy(
             id="integration-policy",
             name="Integration Test Policy",
             description="Policy for integration test",

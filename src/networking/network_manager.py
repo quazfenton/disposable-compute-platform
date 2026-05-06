@@ -18,6 +18,7 @@ class StreamingSession:
     started_at: float
     last_activity: float
     input_queue: asyncio.Queue
+    port: Optional[int] = None
 
 
 class NetworkManager:
@@ -103,11 +104,24 @@ class NetworkManager:
             if not port:
                 logging.error(f"No available ports for streaming pod {pod_id}")
                 return None
-            
+
+            # Create a streaming session with the allocated port
+            session = StreamingSession(
+                pod_id=pod_id,
+                websocket=None,  # Will be set when actual connection is established
+                client_ip="",  # Will be set when client connects
+                started_at=0,  # Will be set when connection is established
+                last_activity=0,  # Will be set when connection is established
+                input_queue=asyncio.Queue(),
+                port=port
+            )
+
+            self.register_streaming_session(session)
+
             # Construct the streaming URL
             # In a real implementation, this would set up the actual streaming server
             streaming_url = f"wss://{settings.api_host}:{port}/stream/{pod_id}"
-            
+
             return streaming_url
         except Exception as e:
             logging.error(f"Error setting up streaming endpoint for pod {pod_id}: {e}")
@@ -116,12 +130,17 @@ class NetworkManager:
     async def cleanup_streaming_endpoint(self, pod_id: str):
         """Clean up streaming endpoint for a pod"""
         try:
+            # Get the streaming session to access the port
+            session = self.get_streaming_session(pod_id)
+            if session and session.port:
+                # Release the port back to the pool
+                self.release_port(session.port)
+
             # Remove the streaming session
             self.unregister_streaming_session(pod_id)
-            
+
             # In a real implementation, this would shut down the actual streaming server
-            # For now, we'll just release any allocated ports
-            
+
         except Exception as e:
             logging.error(f"Error cleaning up streaming endpoint for pod {pod_id}: {e}")
     

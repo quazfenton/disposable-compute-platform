@@ -78,8 +78,15 @@ class ConnectionManager:
             await connection.send_text(message)
 
 
+from src.utils.logging_config import setup_logging, get_logger
+
+# Initialize logging
+setup_logging()
+logger = get_logger(__name__)
+
 # Initialize the API
-app = FastAPI(title="Disposable Compute Platform API", version="1.0.0")
+app = FastAPI(title="Vanish Compute (VNC) API", version="1.0.0")
+
 
 # Add CORS middleware
 app.add_middleware(
@@ -200,10 +207,14 @@ async def websocket_logs(websocket: WebSocket, session_id: str, service: str = "
 @app.post("/sessions/{session_id}/fork", response_model=ForkSessionResponse)
 async def fork_session(request: ForkSessionRequest, session_id: str):
     """Fork a session (for GUI sessions)"""
+    # Validate that the source session exists
+    if session_id not in session_manager.sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
     # This is a simplified implementation
     # In a real system, this would create a new session based on a snapshot
     new_session_id = f"fork-{session_id}-{datetime.now().strftime('%H%M%S')}"
-    
+
     # For now, just return the new session ID
     # In a real implementation, we would copy the state from the original session
     return ForkSessionResponse(
